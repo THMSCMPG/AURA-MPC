@@ -1,7 +1,4 @@
 # AURA-MPC — Model Predictive Control
-[![AURA-MPC Source LOC](https://img.shields.io/badge/AURA--MPC-61%2C066%20source%20LOC-brightgreen?style=for-the-badge)](https://github.com/THMSCMPG/AURA-MPC)
-[![Python](https://img.shields.io/badge/Python-29%2C256-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://github.com/THMSCMPG/AURA-MPC)
-[![Fortran 90](https://img.shields.io/badge/Fortran%2090-25%2C371-734F96?style=for-the-badge)](https://github.com/THMSCMPG/AURA-MPC)
 
 **Atmosphere-Unified Radiation Assessment with Multi-Fidelity for Photovoltaics**
 
