@@ -1,0 +1,17 @@
+# Stand-alone image-pipeline config consumed by scripts/preprocess_images.py.
+# Merged on top of the defaults in src.config.ImagePipelineConfig. Edit a
+# copy when you need site-specific mean/std or a fisheye circular crop.
+
+image_pipeline:
+  target_size: [32, 32]
+  apply_circular_crop: false
+  circular_crop_radius_frac: 0.95
+  apply_histogram_eq: true
+  apply_sun_mask: true
+  sun_detection_threshold: 0.95
+  sun_mask_method: median_inpaint
+  add_rbr_channel: false
+  normalize: true
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  interpolation: area

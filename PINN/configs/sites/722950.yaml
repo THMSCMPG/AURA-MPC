@@ -1,0 +1,8 @@
+site_id: "722950"
+name: "Houston TX"
+lat: 29.98
+lon: -95.37
+tilt: 20.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

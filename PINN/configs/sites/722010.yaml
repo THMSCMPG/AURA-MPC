@@ -1,0 +1,8 @@
+site_id: "722010"
+name: "Miami FL"
+lat: 25.82
+lon: -80.28
+tilt: 15.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

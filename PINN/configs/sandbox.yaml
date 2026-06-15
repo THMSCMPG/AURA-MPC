@@ -1,0 +1,43 @@
+# PINN-AURA-MFP sandbox defaults (phase-2 RL + live demo)
+
+physics:
+  # Keep configurable; c-Si default temperature coefficient
+  beta_Pmax: -0.004
+  eta_ref: 0.18
+  T_ref_K: 298.15
+
+sandbox:
+  seed: 42
+  dt_s: 1.0
+  episode_steps: 64
+  train_epochs: 40
+  episodes_per_epoch: 8
+  discount_gamma: 0.98
+  learning_rate: 3.0e-4
+  policy_hidden_dim: 128
+  policy_std: 0.25
+  reward_w_capture: 1.0
+  reward_w_temp: 0.4
+  reward_temp_margin_K: 0.0
+  reward_capture_scale: 1.0e-3
+  reward_temp_scale: 1.0
+  lat_min: -65.0
+  lat_max: 65.0
+  lon_min: -180.0
+  lon_max: 180.0
+  day_min: 1
+  day_max: 365
+  hour_min: 5.0
+  hour_max: 19.0
+  ambient_c_min: -15.0
+  ambient_c_max: 45.0
+  wind_min: 0.0
+  wind_max: 20.0
+  cloud_min: 0.0
+  cloud_max: 1.0
+  g_peak_min: 500.0
+  g_peak_max: 1100.0
+  pose_change_penalty: 1.0e-3
+  command_log_path: /var/run/aura/commands.jsonl
+  z_to_height_mm_max: 130.0
+  validation_samples: 16

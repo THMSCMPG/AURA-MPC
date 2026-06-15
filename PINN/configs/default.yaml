@@ -1,0 +1,34 @@
+# PINN-AURA-MFP default configuration.
+# This is a minimal, smoke-friendly baseline for demos and quick validation.
+# Run `python tools/run/runner.py train --config configs/default.yaml` or `make run-train`.
+
+contract:
+  decision_cadence_s: 3.0
+  uncertainty_watchdog: 0.55
+
+model:
+  num_numeric_features: 7
+  hidden_dim: 128
+  num_residual_blocks: 5
+  num_routes: 5
+  pose_hidden: 64  # width of the pose regression head
+
+training:
+  # Short defaults for quick smoke runs. Use a custom config for real training.
+  pretrain_epochs: 10
+  sim_loop_epochs: 10
+  finetune_epochs: 10
+  route_warmup_epochs: 5
+  lr: 1.0e-3
+  batch_size: 64
+  lambda_pose: 0.0  # 0 = pose head trains structure only; raise once Phase 4 sweep labels exist
+
+physics:
+  tau_0_init: 600.0
+  U0_init: 25.0
+  U1_init: 6.84
+
+paths:
+  training_data_dir: Training_Data
+  checkpoints_dir: checkpoints
+  logs_dir: logs

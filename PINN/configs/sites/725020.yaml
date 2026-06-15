@@ -1,0 +1,8 @@
+site_id: "725020"
+name: "Boston MA"
+lat: 42.36
+lon: -71.00
+tilt: 30.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

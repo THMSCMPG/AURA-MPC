@@ -1,0 +1,8 @@
+site_id: "722440"
+name: "Dallas TX"
+lat: 32.90
+lon: -97.05
+tilt: 20.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

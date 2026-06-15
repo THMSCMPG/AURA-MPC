@@ -1,0 +1,8 @@
+site_id: "726300"
+name: "Chicago IL"
+lat: 41.98
+lon: -87.90
+tilt: 30.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

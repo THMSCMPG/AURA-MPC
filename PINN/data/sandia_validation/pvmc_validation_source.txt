@@ -1,0 +1,15 @@
+SimV4 Sandia validation source
+==============================
+
+File: data/sandia_validation/pvmc_validation_template.csv
+
+This CSV is the validation dataset sampled in SimV4 --test mode.
+
+Provenance:
+- Source dataset: Sandia National Laboratories PV Module Operating Temperature Data
+- In-repo source file: data/Sandia_National_Laboratories_Datasets/PV_Module_Operating_Temperature_Data.nc
+- Conversion script: python/parse_sandia_nc.py
+
+Notes:
+- Columns consumed by SimV4: timestamp, G_poa, T_ambient, T_module, wind_speed, ir_down
+- Read by: testing_simulations/simv4/src/main.f90 (run_sandia_validation_sample)

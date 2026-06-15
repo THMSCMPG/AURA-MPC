@@ -1,0 +1,8 @@
+site_id: "722860"
+name: "Atlanta GA"
+lat: 33.64
+lon: -84.43
+tilt: 20.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

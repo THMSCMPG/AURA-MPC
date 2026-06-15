@@ -1,0 +1,8 @@
+# Development / test dependencies (not needed on the Pi at runtime)
+-r requirements.txt
+
+pytest>=7.4
+pytest-timeout>=2.1
+jsonschema>=4.0
+# Note: figure rendering uses gnuplot (system install), not matplotlib.
+# numpy is already pinned in requirements.txt.

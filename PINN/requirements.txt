@@ -1,0 +1,10 @@
+torch>=2.0.0            # core ML framework
+numpy>=1.24.0,<2.0      # numeric arrays; <2.0 to align with AURA-MFP pin
+scipy>=1.10.0           # ODE integration and scientific utilities
+matplotlib>=3.7.0       # plots for diagnostics
+pyyaml>=6.0.1           # YAML config loader in src/config.py
+pandas>=2.0.0           # CSV ingest for Jakoplic dataset
+pillow>=12.2.0          # sky-image decoding (GZIP bomb + PSD OOB fixed in 12.2)
+opencv-python-headless>=4.8.1.78  # sky-image preprocessing (src/pinn/image_pipeline); headless = no GUI deps in CI; 4.8.1.78 patches CVE-2023-4863 (libwebp)
+tqdm>=4.66.3            # progress bars for training/ingest loops
+pytest>=8.0.0           # test runner

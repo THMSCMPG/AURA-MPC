@@ -1,0 +1,8 @@
+site_id: "722970"
+name: "Austin TX"
+lat: 30.18
+lon: -97.68
+tilt: 20.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

@@ -1,0 +1,40 @@
+# Step 7 — Full PINN training configuration.
+# Populated from the recommended config identified by the Step 6 hyperparameter
+# sweep (results/sweep_results.json, field "recommended_config": "w1.0_p0.1_large").
+#
+# Architecture: large — 7 hidden layers × 256 neurons, tanh activations.
+# Loss weights: w_data=1.0, w_phys=0.1  (Pareto-optimal on val_rmse_T vs physics loss).
+
+# ------------------------------------------------------------------
+# Architecture
+# ------------------------------------------------------------------
+arch: large                 # sweep arch key (small | medium | large | medium_silu)
+hidden_layers: 7            # number of hidden fully-connected layers
+neurons_per_layer: 256      # width of each hidden layer
+activation: tanh            # activation function (tanh | silu)
+
+# ------------------------------------------------------------------
+# Loss weights
+# ------------------------------------------------------------------
+w_data: 1.0                 # data-fidelity loss weight
+w_phys: 0.1                 # physics residual loss weight
+
+# ------------------------------------------------------------------
+# Optimizer
+# ------------------------------------------------------------------
+lr: 0.001                   # Adam initial learning rate
+weight_decay: 1.0e-5        # Adam L2 weight-decay
+
+# ------------------------------------------------------------------
+# LR scheduler  (ReduceLROnPlateau, monitors val_rmse_T)
+# ------------------------------------------------------------------
+lr_factor: 0.5              # multiplicative factor when plateau detected
+lr_patience: 20             # epochs without improvement before decay
+
+# ------------------------------------------------------------------
+# Training loop
+# ------------------------------------------------------------------
+batch_size: 512             # mini-batch size
+max_epochs: 2000            # hard epoch cap
+patience: 50                # early-stopping patience on val_rmse_T
+grad_clip: 1.0              # max-norm gradient clipping

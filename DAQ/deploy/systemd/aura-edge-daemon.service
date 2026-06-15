@@ -1,0 +1,29 @@
+[Unit]
+Description=EDGE-AURA-MFP sensor daemon (reads Pico UART, emits SensorPacket JSONL)
+Documentation=https://github.com/THMSCMPG/EDGE-AURA-MFP
+After=network.target local-fs.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=aura-edge
+Group=aura-edge
+SupplementaryGroups=dialout
+
+WorkingDirectory=/opt/aura-edge
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/aura-edge/venv/bin/python -m pi.daemon --input-mode serial --port /dev/serial0 --baud 115200 --output-mode stdout
+StandardOutput=journal
+StandardError=journal
+
+Restart=on-failure
+RestartSec=5s
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/aura-edge/logs /var/log/aura-edge
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

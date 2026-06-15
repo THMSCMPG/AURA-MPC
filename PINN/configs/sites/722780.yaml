@@ -1,0 +1,8 @@
+site_id: "722780"
+name: "Phoenix AZ"
+lat: 33.43
+lon: -112.02
+tilt: 25.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

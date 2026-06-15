@@ -1,0 +1,8 @@
+site_id: "724030"
+name: "Charlotte NC"
+lat: 35.22
+lon: -80.95
+tilt: 25.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

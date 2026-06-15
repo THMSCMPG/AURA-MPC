@@ -1,0 +1,8 @@
+site_id: "724060"
+name: "Raleigh NC"
+lat: 35.87
+lon: -78.79
+tilt: 25.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

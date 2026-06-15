@@ -1,0 +1,8 @@
+site_id: "726700"
+name: "Minneapolis MN"
+lat: 44.88
+lon: -93.23
+tilt: 35.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"

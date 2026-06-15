@@ -1,0 +1,13 @@
+Spectra data source notes
+=========================
+
+File: data/spectra/AM0AM1_5.xls
+
+This workbook contains the AM0/AM1.5 reference spectrum tables retained in-repo.
+It can be used to regenerate CSV atmospheric lookup tables for training or inference.
+
+Related SimV4 CSV currently used:
+- data/atmospheric_luts/am15_global.csv
+
+If additional atmospheric lookup CSVs are required for training, derive them from
+AM0AM1_5.xls and document their source in this directory.

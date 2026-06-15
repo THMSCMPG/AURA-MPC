@@ -1,0 +1,9 @@
+site_id: "723270"
+name: "Clarksville TN"
+lat: 36.62
+lon: -87.42
+tilt: 25.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"
+holdout: true

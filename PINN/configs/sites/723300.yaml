@@ -1,0 +1,8 @@
+site_id: "723300"
+name: "Nashville TN"
+lat: 36.12
+lon: -86.68
+tilt: 25.0
+azimuth: 180.0
+height: 1.5
+panel_model: "Generic_60cell"
