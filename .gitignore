@@ -69,5 +69,6 @@ Testing/
 .cache/
 
 # generated files and images
-.csv
-.png
+*.csv
+*.png
+/RK4TRAN/independent/*.gp
