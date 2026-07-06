@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,49 @@ def _loads_maybe(value: str | dict[str, Any] | None) -> dict[str, Any] | None:
         raise TypeError("Expected a JSON object")
     return parsed
 
+def _resolve_fortran_binary(cfg_path: Path, configured_path: str) -> Path:
+    binary_path = Path(configured_path)
+    if binary_path.is_absolute():
+        return binary_path
+    pinn_root = cfg_path.parent.parent
+    src_root = pinn_root.parent
+    candidates = [
+        (cfg_path.parent / binary_path).resolve(),
+        (pinn_root / binary_path).resolve(),
+        (src_root / binary_path).resolve(),
+        (src_root / "RK4TRAN" / binary_path.name).resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+def _ensure_fortran_binary(binary_path: Path) -> Path:
+    if binary_path.exists():
+        return binary_path
+    rk4tran_dir = binary_path.parent
+    make_script = rk4tran_dir / "make.sh"
+    if make_script.exists():
+        proc = subprocess.run(
+            [str(make_script)],
+            cwd=str(rk4tran_dir),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise RuntimeError(
+                "Failed to build RK4TRAN evaluator.\n"
+                f"Expected binary: {binary_path}\n"
+                f"Build output:\n{proc.stdout}\n{proc.stderr}"
+            )
+    if not binary_path.exists():
+        raise FileNotFoundError(
+            "RK4TRAN evaluator binary was not found.\n"
+            f"Expected path: {binary_path}\n"
+            "If this is a fresh checkout, build src/RK4TRAN first."
+        )
+    return binary_path
 
 class MatlabSimulationBridge:
     """Thin JSON-string API so MATLAB can drive the Python runtime."""
@@ -47,9 +91,8 @@ class MatlabSimulationBridge:
 
         fortran_cfg = config.get("fortran", {})
         if "binary_path" in fortran_cfg:
-            binary_path = Path(fortran_cfg["binary_path"])
-            if not binary_path.is_absolute():
-                fortran_cfg["binary_path"] = str((cfg_path.parent / binary_path).resolve())
+            resolved_binary = _resolve_fortran_binary(cfg_path, str(fortran_cfg["binary_path"]))
+            fortran_cfg["binary_path"] = str(_ensure_fortran_binary(resolved_binary))
 
         self.runtime = ClosedLoopRuntime(
             config=config,

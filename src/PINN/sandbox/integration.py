@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +46,36 @@ class RK4TRANValidator:
         if not self.binary_path.exists():
             raise FileNotFoundError(f"RK4TRAN evaluator not found: {self.binary_path}")
 
+    @staticmethod
+    def _parse_json_payload(
+        stdout: str,
+        stderr: str,
+        file_payload: str = "",
+    ) -> dict[str, object]:
+        stdout_clean = stdout.replace("\x00", "").strip()
+        stderr_clean = stderr.replace("\x00", "").strip()
+        file_clean = file_payload.replace("\x00", "").strip()
+        candidates = [stdout_clean, file_clean]
+        if stderr_clean.startswith("{") and stderr_clean.endswith("}"):
+            candidates.append(stderr_clean)
+
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                match = re.search(r"\{.*\}", candidate, flags=re.DOTALL)
+                if match is None:
+                    continue
+                parsed = json.loads(match.group(0))
+            if not isinstance(parsed, dict):
+                raise TypeError("RK4TRAN output must decode to a JSON object")
+            return parsed
+
+        detail = stdout_clean or file_clean or stderr_clean or "<empty stdout/stderr>"
+        raise ValueError(f"RK4TRAN returned invalid JSON: {detail!r}")
+
     def predict(
         self,
         weather: dict[str, float],
@@ -72,22 +105,37 @@ class RK4TRANValidator:
             f"{panel_state['roll']:.10f}",
             f"{panel_state['yaw']:.10f}",
         ]
-        proc = subprocess.run(
-            args,
-            capture_output=True,
-            text=True,
-            timeout=self.timeout_s,
-            check=False,
-        )
-        if proc.returncode != 0:
-            stderr = proc.stderr.strip() or "unknown RK4TRAN failure"
-            raise RuntimeError(f"RK4TRAN evaluation failed: {stderr}")
+        env = os.environ.copy()
+        with tempfile.NamedTemporaryFile(prefix="aura_rk4_", suffix=".json", delete=False) as handle:
+            json_path = Path(handle.name)
+        env["AURA_RK4_JSON_PATH"] = str(json_path)
         try:
-            parsed = json.loads(proc.stdout)
-        except json.JSONDecodeError as exc:
-            raise ValueError(f"RK4TRAN returned invalid JSON: {proc.stdout!r}") from exc
-        if not isinstance(parsed, dict):
-            raise TypeError("RK4TRAN output must decode to a JSON object")
+            proc = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                timeout=self.timeout_s,
+                check=False,
+                env=env,
+            )
+            if proc.returncode == 0 and not proc.stdout.strip() and not proc.stderr.strip():
+                proc = subprocess.run(
+                    args,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout_s,
+                    check=False,
+                    env=env,
+                )
+            file_payload = ""
+            if json_path.exists():
+                file_payload = json_path.read_text(encoding="utf-8", errors="replace")
+            if proc.returncode != 0:
+                stderr = proc.stderr.strip() or file_payload.strip() or "unknown RK4TRAN failure"
+                raise RuntimeError(f"RK4TRAN evaluation failed: {stderr}")
+            parsed = self._parse_json_payload(proc.stdout, proc.stderr, file_payload)
+        finally:
+            json_path.unlink(missing_ok=True)
         required = ("T_operating", "eta", "G_eff")
         missing = [key for key in required if key not in parsed]
         if missing:

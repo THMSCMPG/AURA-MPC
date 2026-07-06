@@ -6,6 +6,8 @@ function run_simulation()
     configPath = fullfile(pinnRoot, 'configs', 'sandbox.yaml');
     checkpointPath = fullfile(pinnRoot, 'outputs', 'pretrain', 'checkpoints', 'best_model.pt');
     outputDir = fullfile(pinnRoot, 'outputs', 'simulation');
+    requirementsPath = fullfile(pinnRoot, 'requirements.txt');
+    venvDir = fullfile(pinnRoot, '.matlab-venv');
 
     fig = figure( ...
         'Name', 'AURA-MPC Closed-Loop Simulator', ...
@@ -124,19 +126,43 @@ function run_simulation()
     app.configPath = configPath;
     app.checkpointPath = checkpointPath;
     app.outputDir = outputDir;
+    app.requirementsPath = requirementsPath;
+    app.venvDir = venvDir;
+    app.pythonReady = false;
     guidata(fig, app);
 
     initialize_runtime();
 
     function initialize_runtime()
         app = guidata(fig);
-        app.bridge = create_bridge(app.configPath, app.checkpointPath, app.outputDir);
+        set_status('Preparing Python environment...');
+        stop_timer_if_running(app.timer);
+        try
+            app.bridge = create_bridge( ...
+                app.configPath, ...
+                app.checkpointPath, ...
+                app.outputDir, ...
+                app.requirementsPath, ...
+                app.venvDir);
+            app.pythonReady = true;
+        catch err
+            app.bridge = [];
+            app.pythonReady = false;
+            guidata(fig, app);
+            set_status('Python setup failed');
+            errordlg(sprintf('run_simulation could not prepare its Python runtime.\n\n%s', err.message), ...
+                'AURA-MPC Python setup failed', 'modal');
+            return;
+        end
         guidata(fig, app);
         perform_reset(true);
     end
 
     function onStart(~, ~)
         app = guidata(fig);
+        if ~ensure_bridge_ready()
+            return;
+        end
         app.timer.Period = max(0.05, str2double(app.inputs.period.value.String));
         if app.chkStepThrough.Value
             set_status('Step-through ready');
@@ -150,33 +176,39 @@ function run_simulation()
 
     function onPause(~, ~)
         app = guidata(fig);
-        if strcmp(app.timer.Running, 'on')
-            stop(app.timer);
-        end
+        stop_timer_if_running(app.timer);
         set_status('Paused');
     end
 
     function onReset(~, ~)
+        if ~ensure_bridge_ready()
+            return;
+        end
         perform_reset(true);
     end
 
     function onStep(~, ~)
-        if strcmp(guidata(fig).timer.Running, 'on')
-            stop(guidata(fig).timer);
+        if ~ensure_bridge_ready()
+            return;
         end
+        stop_timer_if_running(guidata(fig).timer);
         advance_once();
         set_status('Stepped');
     end
 
     function onTick(~, ~)
+        if ~ensure_bridge_ready(false)
+            return;
+        end
         advance_once();
     end
 
     function perform_reset(clearPlots)
         app = guidata(fig);
-        if strcmp(app.timer.Running, 'on')
-            stop(app.timer);
+        if isempty(app.bridge)
+            return;
         end
+        stop_timer_if_running(app.timer);
         conditions = gather_conditions();
         pose = gather_pose();
         raw = char(app.bridge.reset(jsonencode(conditions), jsonencode(pose)));
@@ -203,13 +235,16 @@ function run_simulation()
             return;
         end
         app = guidata(fig);
+        if isempty(app.bridge)
+            set_status('Python bridge unavailable');
+            stop_timer_if_running(app.timer);
+            return;
+        end
         raw = char(app.bridge.step('', 'mean', logical(app.chkLearning.Value)));
         snapshot = jsondecode(raw);
         update_snapshot(snapshot, false);
         if isfield(snapshot, 'truncated') && snapshot.truncated
-            if strcmp(app.timer.Running, 'on')
-                stop(app.timer);
-            end
+            stop_timer_if_running(app.timer);
             set_status('Episode complete');
         end
     end
@@ -302,12 +337,27 @@ function run_simulation()
         drawnow limitrate;
     end
 
+    function tf = ensure_bridge_ready(showDialog)
+        if nargin < 1
+            showDialog = true;
+        end
+        app = guidata(fig);
+        tf = isfield(app, 'pythonReady') && app.pythonReady && ~isempty(app.bridge);
+        if tf
+            return;
+        end
+        stop_timer_if_running(app.timer);
+        if showDialog
+            warndlg(['The Python runtime for run_simulation is not ready yet. ' ...
+                     'Use Reset after fixing the setup issue, or restart MATLAB if the Python runtime changed.'], ...
+                     'AURA-MPC simulator not ready', 'modal');
+        end
+    end
+
     function onClose(~, ~)
         app = guidata(fig);
         try
-            if strcmp(app.timer.Running, 'on')
-                stop(app.timer);
-            end
+            stop_timer_if_running(app.timer);
             delete(app.timer);
         catch
         end
@@ -315,26 +365,160 @@ function run_simulation()
     end
 end
 
-function bridge = create_bridge(configPath, checkpointPath, outputDir)
-    persistent cachedBridge cachedConfig cachedCheckpoint cachedOutput
+function bridge = create_bridge(configPath, checkpointPath, outputDir, requirementsPath, venvDir)
+    persistent cachedBridge cachedConfig cachedCheckpoint cachedOutput cachedPython
     here = fileparts(configPath);
     pkgRoot = fileparts(here);
-    pe = pyenv;
-    if strcmp(pe.Status, 'NotLoaded')
-        pyenv('ExecutionMode', 'OutOfProcess');
-    end
+    pythonExe = ensure_python_runtime(requirementsPath, venvDir);
     pyPaths = cell(py.sys.path);
     if ~any(strcmp(pyPaths, pkgRoot))
         insert(py.sys.path, int32(0), pkgRoot);
     end
-    if isempty(cachedBridge) || ~strcmp(cachedConfig, configPath) || ~strcmp(cachedCheckpoint, checkpointPath) || ~strcmp(cachedOutput, outputDir)
+    if isempty(cachedBridge) ...
+            || ~strcmp(cachedConfig, configPath) ...
+            || ~strcmp(cachedCheckpoint, checkpointPath) ...
+            || ~strcmp(cachedOutput, outputDir) ...
+            || ~strcmp(cachedPython, pythonExe)
         mod = py.importlib.import_module('sandbox.matlab_bridge');
         cachedBridge = mod.MatlabSimulationBridge(configPath, checkpointPath, py.None, outputDir, 'cpu');
         cachedConfig = configPath;
         cachedCheckpoint = checkpointPath;
         cachedOutput = outputDir;
+        cachedPython = pythonExe;
     end
     bridge = cachedBridge;
+end
+
+function pythonExe = ensure_python_runtime(requirementsPath, venvDir)
+    requiredModules = {'numpy', 'torch', 'yaml'};
+    runtimePackages = { ...
+        'numpy>=1.24,<2.0', ...
+        'pyyaml>=6.0.1', ...
+        'torch>=2.0.0'};
+    pythonExe = venv_python_executable(venvDir);
+
+    if ~isfile(pythonExe)
+        bootstrap_local_venv(venvDir, runtimePackages);
+    elseif ~python_has_modules(pythonExe, requiredModules)
+        install_runtime_dependencies(pythonExe, runtimePackages, requirementsPath);
+    end
+
+    pe = pyenv;
+    if strcmp(pe.Status, 'Loaded') && ~strcmp(char(pe.Version), pythonExe)
+        try
+            terminate(pe);
+        catch err
+            error(['run_simulation requires a dedicated Python environment at:\n  %s\n' ...
+                   'MATLAB already has a different Python runtime loaded:\n  %s\n' ...
+                   'Restart MATLAB, then run run_simulation again.\n\nOriginal error: %s'], ...
+                   pythonExe, char(pe.Version), err.message);
+        end
+    end
+
+    pe = pyenv;
+    if ~strcmp(pe.Status, 'Loaded') || ~strcmp(char(pe.Version), pythonExe)
+        pyenv('Version', pythonExe, 'ExecutionMode', 'OutOfProcess');
+    end
+
+    if ~python_has_modules(pythonExe, requiredModules)
+        error(['Python environment is missing required modules even after setup.\n' ...
+               'Expected interpreter:\n  %s\n' ...
+               'Required modules: %s'], ...
+               pythonExe, strjoin(requiredModules, ', '));
+    end
+end
+
+function pythonExe = venv_python_executable(venvDir)
+    if ispc
+        pythonExe = fullfile(venvDir, 'Scripts', 'python.exe');
+    else
+        pythonExe = fullfile(venvDir, 'bin', 'python');
+    end
+end
+
+function bootstrap_local_venv(venvDir, runtimePackages)
+    if ~exist(fileparts(venvDir), 'dir')
+        mkdir(fileparts(venvDir));
+    end
+
+    hostPython = find_host_python();
+    [status, cmdout] = system(sprintf('"%s" -m venv "%s"', hostPython, venvDir));
+    if status ~= 0
+        error(['Failed to create the MATLAB Python virtual environment.\n' ...
+               'Command output:\n%s'], cmdout);
+    end
+
+    pythonExe = venv_python_executable(venvDir);
+    install_runtime_dependencies(pythonExe, runtimePackages, '');
+end
+
+function install_runtime_dependencies(pythonExe, runtimePackages, requirementsPath)
+    [statusPip, outPip] = system(sprintf('"%s" -m pip install --upgrade pip', pythonExe));
+    if statusPip ~= 0
+        error(['Failed to upgrade pip for the MATLAB Python environment.\n' ...
+               'Command output:\n%s'], outPip);
+    end
+
+    quotedPackages = cellfun(@(pkg) ['"' pkg '"'], runtimePackages, 'UniformOutput', false);
+    installCmd = sprintf('"%s" -m pip install %s', pythonExe, strjoin(quotedPackages, ' '));
+    [statusReq, outReq] = system(installCmd);
+    if statusReq ~= 0
+        if isempty(requirementsPath)
+            requirementContext = 'Minimal runtime package set for run_simulation.';
+        else
+            requirementContext = sprintf(['Minimal runtime package set derived from run_simulation.\n' ...
+                                          'Full PINN requirements were intentionally not used because they include ' ...
+                                          'packages that may not be available for the MATLAB Python version.\n' ...
+                                          'Reference requirements file:\n  %s'], requirementsPath);
+        end
+        error(['Failed to install Python dependencies for run_simulation.\n' ...
+               '%s\n' ...
+               'Command output:\n%s'], requirementContext, outReq);
+    end
+end
+
+function tf = python_has_modules(pythonExe, moduleNames)
+    quotedModules = cellfun(@(name) ['''' name ''''], moduleNames, 'UniformOutput', false);
+    pythonSnippet = sprintf(['import importlib.util\n' ...
+                             'mods=[%s]\n' ...
+                             'missing=[m for m in mods if importlib.util.find_spec(m) is None]\n' ...
+                             'raise SystemExit(0 if not missing else 1)\n'], ...
+                             strjoin(quotedModules, ','));
+    [status, ~] = system(sprintf('"%s" -c "%s"', pythonExe, escape_shell_double_quotes(pythonSnippet)));
+    tf = (status == 0);
+end
+
+function pythonExe = find_host_python()
+    if ispc
+        candidates = {'py -3', 'python', 'python3'};
+    else
+        candidates = {'python3', 'python'};
+    end
+
+    for idx = 1:numel(candidates)
+        probe = candidates{idx};
+        [status, out] = system(sprintf('%s -c "import sys; print(sys.executable)"', probe));
+        if status == 0
+            pythonExe = strtrim(out);
+            return;
+        end
+    end
+
+    error(['Could not find a host Python interpreter to bootstrap run_simulation.\n' ...
+           'Install Python 3, then rerun the simulator.']);
+end
+
+function out = escape_shell_double_quotes(text)
+    out = strrep(text, '"', '\"');
+end
+
+function stop_timer_if_running(tmr)
+    try
+        if strcmp(tmr.Running, 'on')
+            stop(tmr);
+        end
+    catch
+    end
 end
 
 function h = empty_history()

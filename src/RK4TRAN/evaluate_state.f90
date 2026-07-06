@@ -80,8 +80,9 @@ program evaluate_state
     integer, parameter :: EXPECTED_ARGS = 19
     real(c_double), parameter :: TOL = 1.0e-5_c_double
     character(len=64) :: arg
+    character(len=512) :: json_path
     character(len=128) :: tmpfile
-    integer :: c0, c1, cr, ios, i, suffix
+    integer :: c0, c1, cr, ios, i, suffix, json_unit, env_status
     real(c_double) :: ic(2), runtime_ms, r
 
     if (command_argument_count() /= EXPECTED_ARGS) then
@@ -130,12 +131,18 @@ program evaluate_state
         runtime_ms = 0.0_c_double
     end if
 
-    write(6, '(A)') '{'
-    write(6, '(A,F12.6,A)') '  "T_operating": ', ic(1), ','
-    write(6, '(A,F12.6,A)') '  "eta": ', ic(2), ','
-    write(6, '(A,F12.6,A)') '  "G_eff": ', env_G_eff, ','
-    write(6, '(A,F12.3)') '  "runtime_ms": ', runtime_ms
-    write(6, '(A)') '}'
+    call get_environment_variable("AURA_RK4_JSON_PATH", json_path, status=env_status)
+    if (env_status == 0 .and. len_trim(json_path) > 0) then
+        open(newunit=json_unit, file=trim(json_path), status='replace', action='write', iostat=ios)
+        if (ios == 0) then
+            call write_json_record(json_unit, ic, runtime_ms)
+            flush(json_unit)
+            close(json_unit)
+        end if
+    end if
+
+    call write_json_record(6, ic, runtime_ms)
+    flush(6)
 
 contains
 
@@ -176,4 +183,17 @@ contains
         y_final(1) = y1_last
         y_final(2) = y2_last
     end subroutine read_last_row
+
+    subroutine write_json_record(unit_no, y_final, elapsed_ms)
+        integer, intent(in) :: unit_no
+        real(c_double), intent(in) :: y_final(:)
+        real(c_double), intent(in) :: elapsed_ms
+
+        write(unit_no, '(A)') '{'
+        write(unit_no, '(A,F12.6,A)') '  "T_operating": ', y_final(1), ','
+        write(unit_no, '(A,F12.6,A)') '  "eta": ', y_final(2), ','
+        write(unit_no, '(A,F12.6,A)') '  "G_eff": ', env_G_eff, ','
+        write(unit_no, '(A,F12.3)') '  "runtime_ms": ', elapsed_ms
+        write(unit_no, '(A)') '}'
+    end subroutine write_json_record
 end program evaluate_state

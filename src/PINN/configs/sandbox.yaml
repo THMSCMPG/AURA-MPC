@@ -10,7 +10,7 @@ physics:
   T_ref_K: 298.15
 
 fortran:
-  binary_path: ../RK4TRAN/evaluate_state
+  binary_path: ../../RK4TRAN/evaluate_state
   timeout_s: 30.0
 
 sandbox:

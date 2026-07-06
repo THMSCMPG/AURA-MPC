@@ -20,7 +20,7 @@ from .integration import SandboxPINNAgent
 from .viewer import Viewer3D
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SandboxTrainArtifacts:
     """Output artifacts from sandbox training."""
 

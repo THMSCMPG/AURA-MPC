@@ -72,4 +72,9 @@ Testing/
 *.csv
 *.png
 /RK4TRAN/independent/*.gp
+*/.DS_Store
+*/*/.DS_Store
+**/.DS_Store
 .DS_Store
+
+.matlab-venv
