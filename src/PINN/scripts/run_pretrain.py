@@ -80,8 +80,8 @@ def main() -> None:
     if config["data"].get("normalize"):
         print("Fitting normalizer...")
         normalizer = NumericNormalizer()
-        # Fit on full dataset (in practice, fit on train only)
-        normalizer.fit({"weather": [], "panel_state": [], "location": []})
+        # Fit on the loaded dataset so normalization matches the actual RK4TRAN inputs.
+        normalizer.fit(dataset.get_normalizer_data())
         normalizer.save(checkpoint_dir / "normalizer.json")
 
     # Create dataloaders
@@ -101,8 +101,16 @@ def main() -> None:
 
     # Create model
     print("Creating model...")
+    dataset_input_dim = dataset.get_input_dim()
+    config_input_dim = config["model"]["input_dim"]
+    if config_input_dim != dataset_input_dim:
+        print(
+            "Warning: model.input_dim does not match dataset features "
+            f"({config_input_dim} configured vs {dataset_input_dim} observed). "
+            "Using dataset-derived input_dim."
+        )
     model = PINNSurrogate(
-        input_dim=config["model"]["input_dim"],
+        input_dim=dataset_input_dim,
         hidden_dim=config["model"]["hidden_dim"],
         num_residual_blocks=config["model"]["num_residual_blocks"],
         num_outputs=config["model"]["num_outputs"],

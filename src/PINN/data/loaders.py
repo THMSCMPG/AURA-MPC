@@ -136,6 +136,50 @@ class RK4TRANDataset(Dataset):
         """Number of samples."""
         return len(self.samples)
 
+    def get_normalizer_data(self) -> dict[str, NDArray[np.float32]]:
+        """Collect numeric feature arrays for fitting a normalizer.
+        Returns:
+            Dict of feature group name to 2D float32 array shaped [N, D]
+        """
+        if not self.samples:
+            raise ValueError("Cannot fit normalizer on an empty RK4TRAN dataset")
+        normalizer_data: dict[str, NDArray[np.float32]] = {
+            "weather": np.asarray(
+                [[sample.weather.get(k, 0.0) for k in self.WEATHER_FIELDS] for sample in self.samples],
+                dtype=np.float32,
+            ),
+            "panel_state": np.asarray(
+                [[sample.panel_state.get(k, 0.0) for k in self.PANEL_STATE_FIELDS] for sample in self.samples],
+                dtype=np.float32,
+            ),
+            "location": np.asarray([sample.location for sample in self.samples], dtype=np.float32),
+        }
+        time_lengths = {len(sample.time_components) for sample in self.samples}
+        if time_lengths == {0}:
+            return normalizer_data
+        if len(time_lengths) != 1:
+            raise ValueError(
+                "RK4TRAN dataset contains inconsistent time vector lengths; "
+                f"found lengths {sorted(time_lengths)}"
+            )
+        normalizer_data["time"] = np.asarray(
+            [sample.time_components for sample in self.samples],
+            dtype=np.float32,
+        )
+        return normalizer_data
+    
+    def get_input_dim(self) -> int:
+        """Return the flattened model input dimension for this dataset."""
+        if not self.samples:
+            raise ValueError("Cannot infer input dimension from an empty RK4TRAN dataset")
+        sample = self.samples[0]
+        return (
+            len(self.WEATHER_FIELDS)
+            + len(self.PANEL_STATE_FIELDS)
+            + len(sample.location)
+            + len(sample.time_components)
+        )
+        
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         """Get sample by index.
 

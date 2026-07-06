@@ -36,6 +36,8 @@ class NumericNormalizer:
         self.field_ranges = {}
         for field, values in data.items():
             values_arr = np.array(values).flatten()
+            if values_arr.size == 0:
+                raise ValueError(f"Cannot fit normalizer on empty field '{field}'")
             self.field_ranges[field] = (float(np.min(values_arr)), float(np.max(values_arr)))
         self.fitted = True
 
