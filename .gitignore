@@ -72,3 +72,4 @@ Testing/
 *.csv
 *.png
 /RK4TRAN/independent/*.gp
+.DS_Store
