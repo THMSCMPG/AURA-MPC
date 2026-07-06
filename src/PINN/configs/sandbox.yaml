@@ -10,9 +10,8 @@ physics:
   T_ref_K: 298.15
 
 fortran:
-  binary_path: ../RK4TRAN/main
+  binary_path: ../RK4TRAN/evaluate_state
   timeout_s: 30.0
-  cache_size: 2000
 
 sandbox:
   seed: 42
@@ -34,10 +33,20 @@ sandbox:
   reward_w_temp: 0.4                    # Weight for temperature penalty
   reward_temp_margin_K: 0.0             # Acceptable temp above reference
   reward_temp_scale: 1.0                # Temperature penalty magnitude
-  
+  reward_w_correction: 0.05             # Penalize PINN drift when RK4TRAN disagrees
+  correction_temp_scale_K: 15.0         # Normalize RK4-vs-PINN thermal drift
+  correction_eta_scale: 0.05            # Normalize RK4-vs-PINN efficiency drift
+
   # Component 3: Action Smoothness (discourage jitter)
   pose_change_penalty: 1.0e-3           # L2 penalty on pose changes
-  
+
+  # Validation / reward source
+  validation_mode: every_step           # every_step, periodic, episodic
+  validation_period: 1                  # Used when validation_mode=periodic
+  reward_source: validated              # validated, hybrid, corrected
+  correction_alpha: 0.25                # EMA bias update for non-validated steps
+  online_policy_updates: true
+
   # Episode domain randomization
   lat_min: -65.0
   lat_max: 65.0

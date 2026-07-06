@@ -1,206 +1,225 @@
-"""PINN-RK4TRAN integration for sandbox validation.
-
-This module compares PINN predictions against RK4TRAN ground truth
-during RL training, enabling uncertainty quantification and policy calibration.
-"""
+"""PINN + RK4TRAN closed-loop integration utilities."""
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from typing import Optional
 
-from models import PINNSurrogate  # Instead of: from ..models import PINNSurrogate
-
-import numpy as np
 import torch
 from torch import Tensor
 
+from data import NumericNormalizer
+from models import PINNSurrogate
+
+_WEATHER_DIM = 7
+_PANEL_DIM = 4
+_LOCATION_DIM = 3
+_BASE_INPUT_DIM = _WEATHER_DIM + _PANEL_DIM + _LOCATION_DIM
+
+
+def _resolve_state_dict(checkpoint: object) -> dict[str, Tensor]:
+    if not isinstance(checkpoint, dict):
+        raise TypeError("PINN checkpoint must deserialize to a state dict or wrapper dict")
+    if "input_proj.0.weight" in checkpoint:
+        return checkpoint
+    state = checkpoint.get("model_state") or checkpoint.get("state_dict")
+    if isinstance(state, dict):
+        return state
+    raise KeyError("PINN checkpoint does not contain model weights")
+
 
 class RK4TRANValidator:
-    """Wrapper for RK4TRAN Fortran binary for truth validation."""
+    """Wrapper around the single-state RK4TRAN evaluator binary."""
 
     def __init__(
         self,
         binary_path: Path | str,
         timeout_s: float = 10.0,
-        cache_size: int = 10000,
     ) -> None:
-        """Initialize RK4TRAN validator.
-
-        Args:
-            binary_path: Path to compiled RK4TRAN executable
-            timeout_s: Timeout for binary execution
-            cache_size: Number of cached samples from binary
-        """
-        import subprocess
-        
         self.binary_path = Path(binary_path)
-        self.timeout_s = timeout_s
-        self.cache_size = cache_size
-        self._sample_cache = None
-        self._cache_idx = 0
-
+        self.timeout_s = float(timeout_s)
         if not self.binary_path.exists():
-            raise FileNotFoundError(f"RK4TRAN binary not found: {self.binary_path}")
-        
-        # Pre-generate sample cache on init
-        self._load_sample_cache()
-
-    def _load_sample_cache(self) -> None:
-        """Generate sample cache by running RK4TRAN binary."""
-        import subprocess
-        import os
-        
-        try:
-            binary_dir = self.binary_path.parent
-            work_dir = binary_dir / "work"
-            work_dir.mkdir(exist_ok=True)
-            
-            # Run RK4TRAN to generate data
-            result = subprocess.run(
-                [str(self.binary_path)],
-                cwd=str(binary_dir),
-                timeout=self.timeout_s,
-                capture_output=True,
-                text=True,
-            )
-            
-            # Load generated CSV (use "spacious" for diverse coverage)
-            csv_path = work_dir / "spacious.csv"
-            if not csv_path.exists():
-                raise FileNotFoundError(f"RK4TRAN did not generate: {csv_path}")
-            
-            # Parse CSV into memory
-            samples = []
-            with open(csv_path) as f:
-                lines = f.readlines()
-                for line in lines[1:self.cache_size + 1]:  # Skip header
-                    parts = line.strip().split(',')
-                    if len(parts) >= 17:
-                        samples.append({
-                            "T_operating": float(parts[13].strip()),
-                            "T_operating_sigma": float(parts[14].strip()),
-                            "eta": float(parts[15].strip()),
-                            "eta_sigma": float(parts[16].strip()),
-                        })
-            
-            self._sample_cache = samples
-            self._cache_idx = 0
-            print(f"✓ Loaded RK4TRAN cache: {len(samples)} samples")
-            
-        except Exception as e:
-            print(f"⚠ RK4TRAN cache initialization failed: {e}")
-            self._sample_cache = []
+            raise FileNotFoundError(f"RK4TRAN evaluator not found: {self.binary_path}")
 
     def predict(
         self,
         weather: dict[str, float],
         panel_state: dict[str, float],
         location: dict[str, float],
-        time_components: Optional[dict[str, float]] = None,
+        time_components: dict[str, float],
     ) -> dict[str, float]:
-        """Get RK4TRAN prediction for given conditions.
-
-        Uses cached samples (cycled through) for efficiency during RL.
-        For production, would implement actual binary I/O + nearest neighbor lookup.
-
-        Args:
-            weather: Weather dict with T_amb, wind_speed, humidity, irradiance, clouds, pressure
-            panel_state: Panel state dict with pv_height, pitch, roll, yaw
-            location: Location dict with lat, lon, elevation
-            time_components: Optional time dict with hour, day, month, year
-
-        Returns:
-            Dict with T_operating and eta predictions
-        """
-        if not self._sample_cache:
-            return {"T_operating": 45.0, "eta": 0.18}
-        
-        # Cycle through cached samples (not random, for reproducibility)
-        sample = self._sample_cache[self._cache_idx % len(self._sample_cache)]
-        self._cache_idx += 1
-        
+        args = [
+            str(self.binary_path),
+            f"{location['lon']:.10f}",
+            f"{location['lat']:.10f}",
+            f"{location['elevation']:.10f}",
+            f"{time_components['minute']:.10f}",
+            f"{time_components['hour']:.10f}",
+            f"{time_components['day_of_year']:.10f}",
+            f"{time_components['month']:.10f}",
+            f"{time_components['year']:.10f}",
+            f"{weather['T_amb']:.10f}",
+            f"{weather['wind_speed']:.10f}",
+            f"{weather['wind_dir']:.10f}",
+            f"{weather['humidity']:.10f}",
+            f"{weather['irradiance']:.10f}",
+            f"{weather['cloud_cover']:.10f}",
+            f"{weather['pressure']:.10f}",
+            f"{panel_state['pv_height']:.10f}",
+            f"{panel_state['pitch']:.10f}",
+            f"{panel_state['roll']:.10f}",
+            f"{panel_state['yaw']:.10f}",
+        ]
+        proc = subprocess.run(
+            args,
+            capture_output=True,
+            text=True,
+            timeout=self.timeout_s,
+            check=False,
+        )
+        if proc.returncode != 0:
+            stderr = proc.stderr.strip() or "unknown RK4TRAN failure"
+            raise RuntimeError(f"RK4TRAN evaluation failed: {stderr}")
+        try:
+            parsed = json.loads(proc.stdout)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"RK4TRAN returned invalid JSON: {proc.stdout!r}") from exc
+        if not isinstance(parsed, dict):
+            raise TypeError("RK4TRAN output must decode to a JSON object")
+        required = ("T_operating", "eta", "G_eff")
+        missing = [key for key in required if key not in parsed]
+        if missing:
+            raise KeyError(f"RK4TRAN output missing fields: {missing}")
         return {
-            "T_operating": sample["T_operating"],
-            "eta": sample["eta"],
+            "T_operating": float(parsed["T_operating"]),
+            "eta": float(parsed["eta"]),
+            "G_eff": float(parsed["G_eff"]),
+            "runtime_ms": float(parsed.get("runtime_ms", 0.0)),
         }
 
 
 class PINNValidator:
-    """PINN model wrapper for inference during RL."""
+    """PINN model wrapper for closed-loop inference."""
 
-    def __init__(self, checkpoint_path: Path | str, device: str = "cpu") -> None:
-        """Initialize PINN validator.
-
-        Args:
-            checkpoint_path: Path to pre-trained PINN checkpoint
-            device: Device to run inference on
-        """
-
+    def __init__(
+        self,
+        checkpoint_path: Path | str,
+        normalizer_path: Optional[Path | str] = None,
+        device: str = "cpu",
+    ) -> None:
         self.device = device
         self.checkpoint_path = Path(checkpoint_path)
-
         if not self.checkpoint_path.exists():
             raise FileNotFoundError(f"PINN checkpoint not found: {self.checkpoint_path}")
 
-        # Load model
+        checkpoint = torch.load(self.checkpoint_path, map_location=device)
+        state_dict = _resolve_state_dict(checkpoint)
+        if "input_proj.0.weight" not in state_dict:
+            raise KeyError("PINN checkpoint is missing input projection weights")
+        input_dim = int(state_dict["input_proj.0.weight"].shape[1])
+        time_dim = max(0, input_dim - _BASE_INPUT_DIM)
+
+        self.input_dim = input_dim
+        self.time_dim = time_dim
         self.model = PINNSurrogate(
-            input_dim=18,
+            input_dim=input_dim,
             hidden_dim=128,
             num_residual_blocks=4,
         ).to(device)
-
-        # Load weights
-        self.model.load_state_dict(torch.load(self.checkpoint_path, map_location=device))
+        self.model.load_state_dict(state_dict)
         self.model.eval()
+
+        self.normalizer: NumericNormalizer | None = None
+        if normalizer_path is not None:
+            normalizer_file = Path(normalizer_path)
+            if normalizer_file.exists():
+                self.normalizer = NumericNormalizer.load(normalizer_file)
+
+    def _build_time_tensor(self, time_components: dict[str, float]) -> Tensor:
+        raw = [
+            float(time_components["minute"]),
+            float(time_components["hour"]),
+            float(time_components["day_of_year"]),
+            float(time_components["month"]),
+            float(time_components["year"]),
+        ]
+        if self.time_dim <= 0:
+            return torch.zeros(0, dtype=torch.float32)
+        if len(raw) >= self.time_dim:
+            values = raw[: self.time_dim]
+        else:
+            values = raw + [0.0] * (self.time_dim - len(raw))
+        return torch.tensor(values, dtype=torch.float32)
+
+    def _normalize_sample(self, sample: dict[str, Tensor]) -> dict[str, Tensor]:
+        if self.normalizer is None:
+            return sample
+        return self.normalizer.normalize(sample)
 
     def predict(
         self,
-        weather: Tensor,  # [7]
-        panel_state: Tensor,  # [4]
-        location: Tensor,  # [3]
-        time: Optional[Tensor] = None,  # [4] optional
-    ) -> dict[str, Tensor]:
-        """Get PINN prediction.
-
-        Args:
-            weather: Weather tensor [7]: T_amb, wind_speed, wind_dir, humidity, irradiance, clouds, pressure
-            panel_state: Panel state tensor [4]: height, pitch, roll, yaw
-            location: Location tensor [3]: lat, lon, elevation
-            time: Optional time tensor [4]: hour, day, month, year
-
-        Returns:
-            Dict with T_operating, T_sigma, eta, eta_sigma
-        """
+        weather: dict[str, float],
+        panel_state: dict[str, float],
+        location: dict[str, float],
+        time_components: dict[str, float],
+    ) -> dict[str, float]:
         with torch.no_grad():
-            # Ensure tensors are on correct device
-            weather = weather.to(self.device)
-            panel_state = panel_state.to(self.device)
-            location = location.to(self.device)
-
-            # Concatenate input
-            if time is not None:
-                time = time.to(self.device)
-                x = torch.cat([weather, panel_state, location, time], dim=-1)
-            else:
-                x = torch.cat([weather, panel_state, location], dim=-1)
-
-            # Ensure correct shape [1, input_dim]
-            if x.dim() == 1:
-                x = x.unsqueeze(0)
-
-            # Forward pass
-            output = self.model(x)
-
-            return output
+            sample = {
+                "weather": torch.tensor(
+                    [
+                        weather["T_amb"],
+                        weather["wind_speed"],
+                        weather["wind_dir"],
+                        weather["humidity"],
+                        weather["irradiance"],
+                        weather["cloud_cover"],
+                        weather["pressure"],
+                    ],
+                    dtype=torch.float32,
+                ),
+                "panel_state": torch.tensor(
+                    [
+                        panel_state["pv_height"],
+                        panel_state["pitch"],
+                        panel_state["roll"],
+                        panel_state["yaw"],
+                    ],
+                    dtype=torch.float32,
+                ),
+                "location": torch.tensor(
+                    [
+                        location["lat"],
+                        location["lon"],
+                        location["elevation"],
+                    ],
+                    dtype=torch.float32,
+                ),
+                "time": self._build_time_tensor(time_components),
+            }
+            sample = self._normalize_sample(sample)
+            x = torch.cat(
+                [sample["weather"], sample["panel_state"], sample["location"], sample["time"]],
+                dim=0,
+            ).to(self.device)
+            if x.numel() != self.input_dim:
+                raise ValueError(
+                    f"PINN input width mismatch: built {x.numel()} features but checkpoint expects {self.input_dim}"
+                )
+            outputs = self.model(x.unsqueeze(0))
+        return {
+            "T_operating": float(outputs["T_operating"].squeeze().item()),
+            "T_operating_sigma": float(outputs["T_operating_sigma"].squeeze().item()),
+            "eta": float(outputs["eta"].squeeze().item()),
+            "eta_sigma": float(outputs["eta_sigma"].squeeze().item()),
+        }
 
 
 class ComparisonMetrics:
-    """Metrics for comparing PINN vs RK4TRAN predictions."""
+    """Accumulator for PINN-vs-RK4TRAN drift statistics."""
 
     def __init__(self) -> None:
-        """Initialize metrics accumulator."""
         self.T_errors: list[float] = []
         self.eta_errors: list[float] = []
         self.T_pinn: list[float] = []
@@ -208,64 +227,37 @@ class ComparisonMetrics:
         self.eta_pinn: list[float] = []
         self.eta_rk4: list[float] = []
 
-    def update(
-        self,
-        pinn_pred: dict[str, Tensor | float],
-        rk4_pred: dict[str, float],
-    ) -> None:
-        """Update metrics with new predictions.
-
-        Args:
-            pinn_pred: PINN prediction dict
-            rk4_pred: RK4TRAN prediction dict
-        """
-        # Extract values
-        T_p = (
-            pinn_pred["T_operating"].item()
-            if isinstance(pinn_pred["T_operating"], Tensor)
-            else pinn_pred["T_operating"]
-        )
-        T_r = rk4_pred["T_operating"]
-
-        eta_p = (
-            pinn_pred["eta"].item() if isinstance(pinn_pred["eta"], Tensor) else pinn_pred["eta"]
-        )
-        eta_r = rk4_pred["eta"]
-
-        # Accumulate
-        self.T_pinn.append(T_p)
-        self.T_rk4.append(T_r)
-        self.T_errors.append(abs(T_p - T_r))
-
+    def update(self, pinn_pred: dict[str, float], rk4_pred: dict[str, float]) -> None:
+        t_p = float(pinn_pred["T_operating"])
+        t_r = float(rk4_pred["T_operating"])
+        eta_p = float(pinn_pred["eta"])
+        eta_r = float(rk4_pred["eta"])
+        self.T_pinn.append(t_p)
+        self.T_rk4.append(t_r)
+        self.T_errors.append(abs(t_p - t_r))
         self.eta_pinn.append(eta_p)
         self.eta_rk4.append(eta_r)
         self.eta_errors.append(abs(eta_p - eta_r))
 
     def get_summary(self) -> dict[str, float]:
-        """Get summary statistics.
-
-        Returns:
-            Dict with MAE, RMSE, bias for T and eta
-        """
         if not self.T_errors:
             return {}
-
-        import numpy as np
-
-        T_errors = np.array(self.T_errors)
-        eta_errors = np.array(self.eta_errors)
-
+        t_errors = torch.tensor(self.T_errors, dtype=torch.float32)
+        eta_errors = torch.tensor(self.eta_errors, dtype=torch.float32)
+        t_pinn = torch.tensor(self.T_pinn, dtype=torch.float32)
+        t_rk4 = torch.tensor(self.T_rk4, dtype=torch.float32)
+        eta_pinn = torch.tensor(self.eta_pinn, dtype=torch.float32)
+        eta_rk4 = torch.tensor(self.eta_rk4, dtype=torch.float32)
         return {
-            "T_mae": float(np.mean(T_errors)),
-            "T_rmse": float(np.sqrt(np.mean(T_errors**2))),
-            "T_bias": float(np.mean(np.array(self.T_pinn) - np.array(self.T_rk4))),
-            "eta_mae": float(np.mean(eta_errors)),
-            "eta_rmse": float(np.sqrt(np.mean(eta_errors**2))),
-            "eta_bias": float(np.mean(np.array(self.eta_pinn) - np.array(self.eta_rk4))),
+            "T_mae": float(t_errors.mean().item()),
+            "T_rmse": float(torch.sqrt((t_errors**2).mean()).item()),
+            "T_bias": float((t_pinn - t_rk4).mean().item()),
+            "eta_mae": float(eta_errors.mean().item()),
+            "eta_rmse": float(torch.sqrt((eta_errors**2).mean()).item()),
+            "eta_bias": float((eta_pinn - eta_rk4).mean().item()),
         }
 
     def reset(self) -> None:
-        """Clear all metrics."""
         self.T_errors.clear()
         self.eta_errors.clear()
         self.T_pinn.clear()
@@ -275,95 +267,88 @@ class ComparisonMetrics:
 
 
 class SandboxPINNAgent:
-    """Agent that uses pre-trained PINN in sandbox environment.
-
-    Wraps:
-    - PINN for predictions
-    - RK4TRAN for validation
-    - Comparison metrics
-    """
+    """Closed-loop agent exposing PINN estimates and RK4TRAN validation."""
 
     def __init__(
         self,
         pinn_checkpoint: Path | str,
         rk4_binary: Optional[Path | str] = None,
+        normalizer_path: Optional[Path | str] = None,
         device: str = "cpu",
+        correction_alpha: float = 0.25,
     ) -> None:
-        """Initialize sandbox PINN agent.
-
-        Args:
-            pinn_checkpoint: Path to pre-trained PINN checkpoint
-            rk4_binary: Optional path to RK4TRAN binary
-            device: Device for PINN inference
-        """
-        self.pinn = PINNValidator(pinn_checkpoint, device=device)
+        self.pinn = PINNValidator(
+            checkpoint_path=pinn_checkpoint,
+            normalizer_path=normalizer_path,
+            device=device,
+        )
         self.rk4 = RK4TRANValidator(rk4_binary) if rk4_binary else None
         self.metrics = ComparisonMetrics()
+        self.correction_alpha = float(correction_alpha)
+        self._bias_state = {"T_operating": 0.0, "eta": 0.0}
+
+    def _update_bias(self, discrepancy: dict[str, float]) -> None:
+        for key in self._bias_state:
+            self._bias_state[key] = (
+                (1.0 - self.correction_alpha) * self._bias_state[key]
+                + self.correction_alpha * float(discrepancy[key])
+            )
+
+    def _bias_correct(self, pinn_out: dict[str, float]) -> dict[str, float]:
+        corrected_eta = float(pinn_out["eta"] + self._bias_state["eta"])
+        corrected = {
+            "T_operating": float(pinn_out["T_operating"] + self._bias_state["T_operating"]),
+            "T_operating_sigma": float(pinn_out["T_operating_sigma"]),
+            "eta": float(max(0.0, min(1.0, corrected_eta))),
+            "eta_sigma": float(pinn_out["eta_sigma"]),
+        }
+        return corrected
 
     def predict(
         self,
-        weather: Tensor,
-        panel_state: Tensor,
-        location: Tensor,
-        time: Optional[Tensor] = None,
+        weather: dict[str, float],
+        panel_state: dict[str, float],
+        location: dict[str, float],
+        time_components: dict[str, float],
         include_rk4: bool = True,
-    ) -> dict[str, Tensor | dict]:
-        """Make prediction and optionally validate with RK4TRAN.
+    ) -> dict[str, dict[str, float] | None]:
+        pinn_out = self.pinn.predict(weather, panel_state, location, time_components)
+        rk4_out: dict[str, float] | None = None
+        discrepancy = {"T_operating": 0.0, "eta": 0.0}
 
-        Args:
-            weather: Weather tensor [7]
-            panel_state: Panel state tensor [4]
-            location: Location tensor [3]
-            time: Optional time tensor [4]
-            include_rk4: Whether to include RK4TRAN comparison
-
-        Returns:
-            Dict with PINN predictions and optional RK4TRAN comparison
-        """
-        # PINN prediction
-        pinn_out = self.pinn.predict(weather, panel_state, location, time)
-
-        result = {"pinn": pinn_out}
-
-        # RK4TRAN validation if available
-        if include_rk4 and self.rk4:
-            weather_dict = {
-                "T_amb": weather[0].item(),
-                "wind_speed": weather[1].item(),
-                "wind_dir": weather[2].item(),
-                "humidity": weather[3].item(),
-                "irradiance": weather[4].item(),
-                "cloud_cover": weather[5].item(),
-                "pressure": weather[6].item(),
+        if include_rk4:
+            if self.rk4 is None:
+                raise RuntimeError("RK4TRAN validation requested but no evaluator binary is configured")
+            rk4_out = self.rk4.predict(weather, panel_state, location, time_components)
+            discrepancy = {
+                "T_operating": float(rk4_out["T_operating"] - pinn_out["T_operating"]),
+                "eta": float(rk4_out["eta"] - pinn_out["eta"]),
             }
-            panel_dict = {
-                "pv_height": panel_state[0].item(),
-                "pitch": panel_state[1].item(),
-                "roll": panel_state[2].item(),
-                "yaw": panel_state[3].item(),
-            }
-            location_dict = {
-                "lat": location[0].item(),
-                "lon": location[1].item(),
-                "elevation": location[2].item(),
-            }
-
-            rk4_out = self.rk4.predict(weather_dict, panel_dict, location_dict)
-            result["rk4"] = rk4_out
-
-            # Update metrics
+            self._update_bias(discrepancy)
             self.metrics.update(pinn_out, rk4_out)
 
-        return result
+        corrected = self._bias_correct(pinn_out)
+        if rk4_out is not None and "G_eff" in rk4_out:
+            corrected["G_eff"] = float(rk4_out["G_eff"])
+
+        return {
+            "pinn": pinn_out,
+            "corrected": corrected,
+            "rk4": rk4_out,
+            "discrepancy": discrepancy,
+            "bias_correction": dict(self._bias_state),
+        }
 
     def get_metrics(self) -> dict[str, float]:
-        """Get current comparison metrics.
-
-        Returns:
-            Dict with MAE, RMSE, bias
-        """
-        return self.metrics.get_summary()
+        summary = self.metrics.get_summary()
+        summary.update(
+            {
+                "bias_T_operating": float(self._bias_state["T_operating"]),
+                "bias_eta": float(self._bias_state["eta"]),
+            }
+        )
+        return summary
 
     def reset_metrics(self) -> None:
-        """Reset metrics accumulator."""
         self.metrics.reset()
+        self._bias_state = {"T_operating": 0.0, "eta": 0.0}

@@ -53,6 +53,9 @@ class Viewer3D:
         weather: dict[str, float],
         pinn_pred: dict[str, float],
         rk4_pred: Optional[dict[str, float]] = None,
+        reward_breakdown: Optional[dict[str, float | str]] = None,
+        discrepancy: Optional[dict[str, float]] = None,
+        decision_reason: str = "",
         episode: int = 0,
         step: int = 0,
     ) -> None:
@@ -72,7 +75,15 @@ class Viewer3D:
         self.frame_count += 1
 
         # Text-based visualization (can be enhanced with matplotlib later)
-        state_str = self._format_state(pose, weather, pinn_pred, rk4_pred)
+        state_str = self._format_state(
+            pose,
+            weather,
+            pinn_pred,
+            rk4_pred,
+            reward_breakdown,
+            discrepancy,
+            decision_reason,
+        )
         self._log_state(state_str, episode, step)
 
     def _format_state(
@@ -81,6 +92,9 @@ class Viewer3D:
         weather: dict[str, float],
         pinn_pred: dict[str, float],
         rk4_pred: Optional[dict[str, float]] = None,
+        reward_breakdown: Optional[dict[str, float | str]] = None,
+        discrepancy: Optional[dict[str, float]] = None,
+        decision_reason: str = "",
     ) -> str:
         """Format state for display.
 
@@ -102,22 +116,47 @@ class Viewer3D:
 
         lines.append("WEATHER")
         lines.append("-" * 70)
-        lines.append(f"  Temp: {weather.get('T_amb', 0):.1f}°C | Wind: {weather.get('wind_speed', 0):.1f} m/s")
+        lines.append(f"  Temp: {weather.get('T_amb', 0):.1f}K | Wind: {weather.get('wind_speed', 0):.1f} m/s")
         lines.append(f"  Irrad: {weather.get('irradiance', 0):.0f} W/m² | Cloud: {weather.get('cloud_cover', 0):.1%}")
 
         lines.append("PREDICTIONS")
         lines.append("-" * 70)
         T_p = pinn_pred.get("T_operating", 0)
         eta_p = pinn_pred.get("eta", 0)
-        lines.append(f"  PINN:  T = {T_p:.1f}°C | η = {eta_p:.4f}")
+        lines.append(f"  PINN:  T = {T_p:.1f}K | η = {eta_p:.4f}")
 
         if rk4_pred:
             T_r = rk4_pred.get("T_operating", 0)
             eta_r = rk4_pred.get("eta", 0)
-            T_err = abs(T_p - T_r)
-            eta_err = abs(eta_p - eta_r)
-            lines.append(f"  RK4:   T = {T_r:.1f}°C | η = {eta_r:.4f}")
-            lines.append(f"  Error: ΔT = {T_err:.2f}°C | Δη = {eta_err:.6f}")
+            if discrepancy:
+                T_err = abs(discrepancy.get("T_operating", 0))
+                eta_err = abs(discrepancy.get("eta", 0))
+            else:
+                T_err = abs(T_p - T_r)
+                eta_err = abs(eta_p - eta_r)
+            lines.append(f"  RK4:   T = {T_r:.1f}K | η = {eta_r:.4f}")
+            lines.append(f"  Error: ΔT = {T_err:.2f}K | Δη = {eta_err:.6f}")
+
+        if reward_breakdown:
+            lines.append("REWARD")
+            lines.append("-" * 70)
+            lines.append(
+                "  "
+                f"capture={float(reward_breakdown.get('capture_reward', 0.0)):+.4f}  "
+                f"temp={float(reward_breakdown.get('temp_penalty', 0.0)):+.4f}  "
+                f"smooth={float(reward_breakdown.get('smoothness_penalty', 0.0)):+.4f}  "
+                f"corr={float(reward_breakdown.get('correction_penalty', 0.0)):+.4f}"
+            )
+            lines.append(
+                "  "
+                f"origin={reward_breakdown.get('reward_origin', 'unknown')}  "
+                f"total={float(reward_breakdown.get('total_reward', 0.0)):+.4f}"
+            )
+
+        if decision_reason:
+            lines.append("DECISION")
+            lines.append("-" * 70)
+            lines.append(f"  {decision_reason}")
 
         lines.append("=" * 70)
 
@@ -169,7 +208,7 @@ class Viewer3D:
             axes[1].plot(T_errors)
             axes[1].set_title("Temperature Prediction Error")
             axes[1].set_xlabel("Step")
-            axes[1].set_ylabel("|T_PINN - T_RK4| (°C)")
+            axes[1].set_ylabel("|T_PINN - T_RK4| (K)")
             axes[1].grid(True)
 
             # Efficiency errors

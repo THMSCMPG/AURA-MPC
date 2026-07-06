@@ -61,4 +61,16 @@ gfortran build/live.o \
     -J build -I build \
     -o live -O3
 
-echo "[8/8] Done.  Run with:  ./main or ./live"
+gfortran -c evaluate_state.f90 -J build -I build -o build/evaluate_state.o
+gfortran build/evaluate_state.o \
+    build/sys_pipes.o \
+    build/csv_parser.o \
+    build/RK_Solver_Library.o \
+    build/Plot_Library.o \
+    build/MC_UQ_Library.o \
+    build/IO_Library.o \
+    build/RK4TRAN.o \
+    -J build -I build \
+    -o evaluate_state -O3
+
+echo "[8/8] Done.  Run with:  ./main, ./live, or ./evaluate_state"

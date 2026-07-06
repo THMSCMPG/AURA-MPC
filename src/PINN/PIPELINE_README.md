@@ -11,7 +11,8 @@ Built on RK4TRAN synthetic data with sandbox RL validation and optional fine-tun
 The PINN training pipeline has been completely rebuilt to:
 1. **Pre-train** on RK4TRAN synthetic data (62k samples, 17 features, MC UQ)
 2. **Validate** in sandbox RL environment with live visualization
-3. **Fine-tune** based on RL insights (optional)
+3. **Train / simulate** in a closed loop where policy actions are checked against RK4TRAN
+4. **Fine-tune** later from RK4TRAN disagreement and rollout traces
 
 ## New Architecture
 
@@ -131,19 +132,19 @@ python scripts/run_pretrain.py \
 - `outputs/pretrain/logs/metrics.csv` - Training metrics
 - `outputs/pretrain/logs/pretrain/` - TensorBoard logs
 
-### 2. Sandbox RL (To Implement)
+### 2. Sandbox RL / Closed-Loop Simulation
 
 ```bash
 python scripts/run_sandbox.py --config configs/sandbox.yaml
 ```
 
-Will include:
-- Load pre-trained PINN checkpoint
-- Live 3D panel visualization
-- Compare PINN vs RK4TRAN predictions
-- Train control policy via RL (PPO/A2C)
+Now includes:
+- Load the pre-trained PINN checkpoint
+- Run `policy -> PINN -> RK4TRAN -> validated reward -> policy update`
+- Log per-step traces for replay and later PINN refinement
+- Produce MATLAB-facing traces and a live simulator entrypoint (`sandbox/run_simulation.m`)
 
-### 3. Fine-tuning (To Implement)
+### 3. Fine-tuning (Next Phase)
 
 ```bash
 python scripts/run_finetune.py \
@@ -220,9 +221,9 @@ Example row:
 - Comprehensive error handling
 
 🔄 **In Progress**
-- Sandbox RL integration
-- 3D live viewer
-- PINN-RK4TRAN comparison
+- MATLAB live simulator polish
+- PINN replay / disagreement fine-tuning loop
+- Selective RK4TRAN validation schedules beyond every-step demo mode
 
 ❌ **Not Yet**
 - Physics-informed loss terms
@@ -281,13 +282,23 @@ pip install torch numpy pyyaml tensorboard
 - No distributed training support
 - Inference only on single samples (no batch optimization)
 
+## Closed-loop runtime
+
+The sandbox now targets this loop:
+
+1. Reset with explicit initial weather / time / location / pose.
+2. Policy proposes the next pose.
+3. PINN predicts fast thermal / efficiency outputs.
+4. RK4TRAN evaluates the same state / pose with the single-state evaluator.
+5. Reward uses the validated RK4TRAN outputs (or hybrid / corrected mode from config).
+6. Per-step traces are written for replay, debugging, and later PINN refinement.
+7. Policy updates at the episode boundary.
+
 ## Next Steps
 
-1. **Test with real data**: Copy RK4TRAN CSV files and run full training
-2. **Implement sandbox**: Integrate PINN with RK4TRAN binary + RL training
-3. **Build viewer**: 3D visualization of panel, weather, predictions
-4. **Optimize**: Profile training, tune hyperparameters, add callbacks
-5. **Validate**: Test on held-out data and real datasets (future)
+1. **Credible demo path**: keep RK4TRAN validation on every step, tune reward weights, and use `run_simulation.m` for inspection.
+2. **Correction path**: move to periodic validation with bias-corrected PINN rewards once every-step behavior is trusted.
+3. **Refinement path**: train on rollout traces where RK4TRAN and PINN disagree most.
 
 ## Debugging
 
