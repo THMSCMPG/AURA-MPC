@@ -1,0 +1,8 @@
+{
+  "reward_mean": -0.44233684275152746,
+  "delta_t_mae": 1000000.0,
+  "delta_eta_mae": 1000000.0,
+  "saturation_rate": 0.0,
+  "smoothness_penalty": 23.717313082757766,
+  "trace_path": "src/PINN/outputs/optuna/trial_00050/closed_loop_trace.jsonl"
+}
