@@ -392,7 +392,7 @@ class PanelEnv:
             return {"T_operating": 45.0, "eta": 0.18}
 
     def _reward(self, pinn_pred: dict[str, float], action_change_norm: float) -> float:
-        """Compute reward.
+        """Compute reward with multi-component shaping.
 
         Args:
             pinn_pred: PINN prediction dict
@@ -403,26 +403,37 @@ class PanelEnv:
         """
         c = self.conditions
 
-        # Irradiance capture reward
+        # ===== Irradiance Capture Component =====
         sun = _sun_vector(c.lat, c.day_of_year, c.hour)
         normal = _panel_normal(self._pose["pitch"], self._pose["yaw"], self._pose["roll"])
         incidence = float(np.clip(float(np.dot(sun, normal)), 0.0, 1.0))
         captured = c.irradiance * incidence
 
+        # Efficiency bonus (encourages high conversion)
         eta_efficiency = pinn_pred["eta"]
         capture_reward = self.reward_w_capture * self.capture_scale * captured * eta_efficiency
 
-        # Temperature penalty
+        # ===== Temperature Control Component =====
         over_temp = max(
             0.0,
             pinn_pred["T_operating"] - (self.t_ref_k + self.temp_margin_k),
         )
         temp_penalty = self.reward_w_temp * self.temp_scale * over_temp
 
-        # Action smoothness penalty
+        # ===== Action Smoothness Component =====
+        # Penalize sudden movements to encourage smooth trajectories
         action_penalty = self.pose_change_penalty * action_change_norm
 
-        return float(capture_reward - temp_penalty - action_penalty)
+        # ===== Stability Bonus =====
+        # Small reward for maintaining pose (when not needed to move)
+        if action_change_norm < 0.1:
+            stability_bonus = 0.01
+        else:
+            stability_bonus = 0.0
+
+        total_reward = capture_reward - temp_penalty - action_penalty + stability_bonus
+
+        return float(total_reward)
 
     def step(self, action: FloatArray) -> tuple[FloatArray, float, bool, bool, dict[str, Any]]:
         """Execute one environment step.

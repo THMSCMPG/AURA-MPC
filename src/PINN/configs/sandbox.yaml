@@ -24,11 +24,21 @@ sandbox:
   learning_rate: 3.0e-4
   policy_hidden_dim: 128
   policy_std: 0.25
-  reward_w_capture: 1.0
-  reward_w_temp: 0.4
-  reward_temp_margin_K: 0.0
-  reward_capture_scale: 1.0e-3
-  reward_temp_scale: 1.0
+  
+  # Reward function tuning (Phase 3 priorities)
+  # Component 1: Irradiance Capture (efficiency & orientation)
+  reward_w_capture: 1.0                 # Weight for capture component
+  reward_capture_scale: 1.0e-3          # Normalize captured irradiance to [-1,1]
+  
+  # Component 2: Temperature Control (keep T < T_ref + margin)
+  reward_w_temp: 0.4                    # Weight for temperature penalty
+  reward_temp_margin_K: 0.0             # Acceptable temp above reference
+  reward_temp_scale: 1.0                # Temperature penalty magnitude
+  
+  # Component 3: Action Smoothness (discourage jitter)
+  pose_change_penalty: 1.0e-3           # L2 penalty on pose changes
+  
+  # Episode domain randomization
   lat_min: -65.0
   lat_max: 65.0
   lon_min: -180.0
@@ -45,7 +55,8 @@ sandbox:
   cloud_max: 1.0
   g_peak_min: 500.0
   g_peak_max: 1100.0
-  pose_change_penalty: 1.0e-3
+  
+  # Misc
   command_log_path: /var/run/aura/commands.jsonl
   z_to_height_mm_max: 130.0
   validation_samples: 16
