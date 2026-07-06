@@ -1,10 +1,18 @@
 # PINN-AURA-MFP sandbox defaults (phase-2 RL + live demo)
 
+model:
+  checkpoint_path: ./outputs/pretrain/checkpoints/best_model.pt
+
 physics:
   # Keep configurable; c-Si default temperature coefficient
   beta_Pmax: -0.004
   eta_ref: 0.18
   T_ref_K: 298.15
+
+fortran:
+  binary_path: ../RK4TRAN/main
+  timeout_s: 30.0
+  cache_size: 2000
 
 sandbox:
   seed: 42

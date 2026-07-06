@@ -18,6 +18,7 @@ import torch
 from torch import Tensor, nn
 from torch.distributions import Normal
 
+from .environment import PanelEnv
 from .integration import SandboxPINNAgent
 from .viewer import Viewer3D
 
@@ -157,16 +158,14 @@ class SandboxTrainer:
 
     def train_episode(
         self,
-        env_step_fn,  # Function to step environment
+        env: PanelEnv,
         episode_steps: int = 64,
-        reward_callback: callable = None,
     ) -> dict[str, float]:
         """Train single episode using REINFORCE.
 
         Args:
-            env_step_fn: Function to step environment (state, action) -> (next_state, reward, done)
+            env: PanelEnv instance
             episode_steps: Max steps per episode
-            reward_callback: Optional callback for reward computation
 
         Returns:
             Episode metrics dict
@@ -176,7 +175,7 @@ class SandboxTrainer:
         trajectory_T_errors: list[float] = []
         trajectory_eta_errors: list[float] = []
 
-        obs = np.zeros(self.obs_dim, dtype=np.float32)  # Placeholder obs
+        obs, _ = env.reset()
 
         for step in range(episode_steps):
             # Policy forward pass
@@ -184,15 +183,22 @@ class SandboxTrainer:
             action, log_prob = self.policy.sample_action(obs_tensor)
 
             # Step environment
-            next_obs, reward, done = env_step_fn(obs, action[0].detach().cpu().numpy())
+            next_obs, reward, terminated, truncated, info = env.step(
+                action[0].detach().cpu().numpy()
+            )
 
             # Track for loss computation
             trajectory_log_probs.append(log_prob)
             trajectory_rewards.append(reward)
 
+            # Track PINN errors if available
+            if "pinn_prediction" in info:
+                # Would compare with ground truth if available
+                pass
+
             obs = next_obs
 
-            if done:
+            if terminated or truncated:
                 break
 
         # Compute returns and loss
@@ -226,7 +232,7 @@ class SandboxTrainer:
         episodes_per_epoch: int = 8,
         episode_steps: int = 64,
         output_dir: Path = Path("outputs/sandbox"),
-        env_step_fn=None,
+        config: dict = None,
     ) -> SandboxTrainArtifacts:
         """Full training loop.
 
@@ -235,7 +241,7 @@ class SandboxTrainer:
             episodes_per_epoch: Episodes per epoch
             episode_steps: Steps per episode
             output_dir: Directory for outputs
-            env_step_fn: Environment step function
+            config: Configuration dict with environment parameters
 
         Returns:
             Training artifacts
@@ -251,6 +257,20 @@ class SandboxTrainer:
 
         viewer = Viewer3D(output_dir=output_dir / "viewer", enabled=True)
 
+        # Create environment
+        sandbox_cfg = config.get("sandbox", {}) if config else {}
+        env = PanelEnv(
+            pinn_agent=self.pinn_agent,
+            seed=sandbox_cfg.get("seed", 42),
+            dt_s=sandbox_cfg.get("dt_s", 1.0),
+            reward_w_capture=sandbox_cfg.get("reward_w_capture", 1.0),
+            reward_w_temp=sandbox_cfg.get("reward_w_temp", 0.4),
+            temp_margin_k=sandbox_cfg.get("reward_temp_margin_K", 0.0),
+            capture_scale=sandbox_cfg.get("reward_capture_scale", 1.0e-3),
+            temp_scale=sandbox_cfg.get("reward_temp_scale", 1.0),
+            pose_change_penalty=sandbox_cfg.get("pose_change_penalty", 1.0e-3),
+        )
+
         # Metrics logging
         with open(metrics_file, "w", newline="") as f:
             writer = csv.DictWriter(
@@ -265,14 +285,11 @@ class SandboxTrainer:
             epoch_returns = []
 
             for episode in range(episodes_per_epoch):
-                # Placeholder training step
-                # In real implementation, would call env.reset() and step environment
-                metrics = {
-                    "episode_return": float(np.random.normal(100, 20)),
-                    "avg_T_error": float(np.random.uniform(1, 5)),
-                    "avg_eta_error": float(np.random.uniform(0.001, 0.01)),
-                    "loss": float(np.random.uniform(0.1, 1.0)),
-                }
+                # Train episode
+                metrics = self.train_episode(
+                    env=env,
+                    episode_steps=episode_steps,
+                )
 
                 epoch_returns.append(metrics["episode_return"])
 
@@ -290,29 +307,32 @@ class SandboxTrainer:
                         }
                     )
 
+                print(
+                    f"  Epoch {epoch:3d} Episode {episode:2d}: "
+                    f"return={metrics['episode_return']:8.2f} "
+                    f"loss={metrics['loss']:.4f}"
+                )
+
             # Epoch summary
-            avg_return = np.mean(epoch_returns)
-            print(
-                f"Epoch {epoch+1}/{num_epochs}: avg_return={avg_return:.2f}, "
-                f"best_return={best_return:.2f}"
-            )
+            epoch_mean_return = float(np.mean(epoch_returns))
+            print(f"Epoch {epoch:3d} avg return: {epoch_mean_return:.2f}")
 
-            # Checkpoint best policy
-            if avg_return > best_return:
-                best_return = avg_return
+            # Save best checkpoint
+            if epoch_mean_return > best_return:
+                best_return = epoch_mean_return
                 torch.save(self.policy.state_dict(), policy_checkpoint)
+                print(f"  ✓ New best return: {best_return:.2f}")
 
-        # Save final policy
+        # Final checkpoint
         torch.save(self.policy.state_dict(), policy_checkpoint)
-
-        print(f"Training complete. Policy saved to {policy_checkpoint}")
 
         return SandboxTrainArtifacts(
             policy_checkpoint=policy_checkpoint,
             metrics_file=metrics_file,
             comparison_file=comparison_file,
-            log_dir=output_dir,
+            log_dir=output_dir / "viewer",
         )
+
 
 
 def train_sandbox_policy(
@@ -354,4 +374,5 @@ def train_sandbox_policy(
         episodes_per_epoch=int(config.get("sandbox", {}).get("episodes_per_epoch", 8)),
         episode_steps=int(config.get("sandbox", {}).get("episode_steps", 64)),
         output_dir=Path(output_dir),
+        config=config,
     )
