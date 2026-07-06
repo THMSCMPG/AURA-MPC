@@ -1,7 +1,7 @@
-"""Entry point for sandbox RL training and validation.
+"""Entry point for sandbox RL training with PINN validation.
 
-This script initializes the PINN with pre-trained weights and trains a control
-policy in the sandbox environment with live 3D visualization.
+This script initializes the pre-trained PINN and trains a control policy
+in the sandbox environment with RK4TRAN validation and live visualization.
 """
 
 import argparse
@@ -14,13 +14,17 @@ import yaml
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from sandbox import train_sandbox_policy
+
 
 def main() -> None:
     """Run sandbox RL training."""
-    parser = argparse.ArgumentParser(description="Run sandbox RL training")
+    parser = argparse.ArgumentParser(description="Train control policy in sandbox environment")
     parser.add_argument("--config", type=str, default="configs/sandbox.yaml", help="Config file path")
-    parser.add_argument("--checkpoint", type=str, help="Override PINN checkpoint path")
-    parser.add_argument("--epochs", type=int, help="Override epochs")
+    parser.add_argument("--pinn-checkpoint", type=str, help="Override PINN checkpoint path")
+    parser.add_argument("--epochs", type=int, help="Override training epochs")
+    parser.add_argument("--episodes-per-epoch", type=int, help="Override episodes per epoch")
+    parser.add_argument("--output-dir", type=str, default="outputs/sandbox", help="Output directory")
     parser.add_argument("--device", type=str, default="auto", help="Device (cuda/cpu/auto)")
     args = parser.parse_args()
 
@@ -32,29 +36,59 @@ def main() -> None:
     with open(config_path, "r") as f:
         config = yaml.safe_load(f)
 
-    # Override config
-    if args.checkpoint:
-        config["model"]["checkpoint_path"] = args.checkpoint
+    # Device setup
+    if args.device == "auto":
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+    else:
+        device = args.device
+    config["device"] = device
+    print(f"Using device: {device}")
+
+    # Override config with CLI args
+    if args.pinn_checkpoint:
+        config["model"]["checkpoint_path"] = args.pinn_checkpoint
     if args.epochs:
         config["sandbox"]["train_epochs"] = args.epochs
+    if args.episodes_per_epoch:
+        config["sandbox"]["episodes_per_epoch"] = args.episodes_per_epoch
 
-    print("Sandbox RL training config:")
-    print(yaml.dump(config))
+    # Get PINN checkpoint
+    pinn_checkpoint = config.get("model", {}).get("checkpoint_path")
+    if not pinn_checkpoint:
+        raise ValueError("PINN checkpoint path not specified in config or CLI args")
 
-    # TODO: Implement sandbox training
-    # 1. Load pre-trained PINN checkpoint
-    # 2. Initialize policy network
-    # 3. Initialize panel environment
-    # 4. Initialize 3D viewer
-    # 5. Run RL training loop:
-    #    - Collect trajectories
-    #    - Compare PINN vs RK4TRAN
-    #    - Update policy
-    #    - Visualize results
-    # 6. Save policy checkpoint and metrics
+    pinn_checkpoint = Path(pinn_checkpoint)
+    if not pinn_checkpoint.exists():
+        print(f"Warning: PINN checkpoint not found: {pinn_checkpoint}")
+        print("  This is expected for the first run.")
+        print("  You should run pre-training first: python scripts/run_pretrain.py")
 
-    print("Sandbox RL training not yet implemented")
-    print("TODO: Implement training loop")
+    print("\nSandbox RL training config:")
+    print(yaml.dump(config, default_flow_style=False))
+
+    # Create output directory
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Run training
+    print("\nStarting sandbox RL training...")
+    try:
+        artifacts = train_sandbox_policy(
+            pinn_checkpoint=pinn_checkpoint,
+            config=config,
+            output_dir=output_dir,
+        )
+
+        print(f"\n✓ Training complete!")
+        print(f"  Policy checkpoint: {artifacts.policy_checkpoint}")
+        print(f"  Metrics file: {artifacts.metrics_file}")
+        print(f"  Log directory: {artifacts.log_dir}")
+
+    except Exception as e:
+        print(f"\n✗ Training failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == "__main__":
