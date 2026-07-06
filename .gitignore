@@ -69,8 +69,7 @@ Testing/
 .cache/
 
 # generated files and images
-*.csv
-*.png
+
 /RK4TRAN/independent/*.gp
 */.DS_Store
 */*/.DS_Store

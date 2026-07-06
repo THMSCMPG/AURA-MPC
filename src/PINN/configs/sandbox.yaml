@@ -15,10 +15,10 @@ fortran:
 
 sandbox:
   seed: 42
-  dt_s: 1.0
-  episode_steps: 64
-  train_epochs: 40
-  episodes_per_epoch: 8
+  dt_s: 3600.0 # original 1.0
+  episode_steps: 640 # original 64
+  train_epochs: 400 # original 40
+  episodes_per_epoch: 8 # original 8
   discount_gamma: 0.98
   learning_rate: 3.0e-4
   policy_hidden_dim: 128
@@ -26,19 +26,19 @@ sandbox:
   
   # Reward function tuning (Phase 3 priorities)
   # Component 1: Irradiance Capture (efficiency & orientation)
-  reward_w_capture: 1.0                 # Weight for capture component
+  reward_w_capture: 0.8                 # Weight for capture component | original 1.0
   reward_capture_scale: 1.0e-3          # Normalize captured irradiance to [-1,1]
   
   # Component 2: Temperature Control (keep T < T_ref + margin)
-  reward_w_temp: 0.4                    # Weight for temperature penalty
+  reward_w_temp: 0.5                    # Weight for temperature penalty | original 0.4
   reward_temp_margin_K: 0.0             # Acceptable temp above reference
   reward_temp_scale: 1.0                # Temperature penalty magnitude
-  reward_w_correction: 0.05             # Penalize PINN drift when RK4TRAN disagrees
+  reward_w_correction: 0.15             # Penalize PINN drift when RK4TRAN disagrees | original 0.05
   correction_temp_scale_K: 15.0         # Normalize RK4-vs-PINN thermal drift
   correction_eta_scale: 0.05            # Normalize RK4-vs-PINN efficiency drift
 
   # Component 3: Action Smoothness (discourage jitter)
-  pose_change_penalty: 1.0e-3           # L2 penalty on pose changes
+  pose_change_penalty: 1.0e-5           # L2 penalty on pose changes | original 1.0e-4
 
   # Validation / reward source
   validation_mode: every_step           # every_step, periodic, episodic

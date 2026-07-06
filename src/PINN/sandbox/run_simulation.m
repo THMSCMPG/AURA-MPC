@@ -40,7 +40,8 @@ function run_simulation()
     axDrift = axes('Parent', fig, 'Units', 'pixels', 'Position', [480 165 420 130]);
     title(axDrift, 'PINN vs RK4TRAN drift');
     xlabel(axDrift, 'Step');
-    ylabel(axDrift, 'Drift');
+    yyaxis(axDrift, 'left'); ylabel(axDrift, '\DeltaT (K)');
+    yyaxis(axDrift, 'right'); ylabel(axDrift, '\Delta\eta');
     grid(axDrift, 'on');
     hold(axDrift, 'on');
 
@@ -51,7 +52,7 @@ function run_simulation()
     grid(axPose, 'on');
     hold(axPose, 'on');
 
-    panelControls = uipanel('Parent', fig, 'Title', 'Controls', 'Units', 'pixels', 'Position', [930 740 530 120]);
+    panelControls = uipanel('Parent', fig, 'Title', 'Controls', 'Units', 'pixels', 'Position', [940 740 520 120]);
     btnStart = uicontrol(panelControls, 'Style', 'pushbutton', 'String', 'Start', ...
         'Position', [15 55 90 35], 'FontWeight', 'bold', 'Callback', @onStart);
     btnPause = uicontrol(panelControls, 'Style', 'pushbutton', 'String', 'Pause', ...
@@ -68,35 +69,35 @@ function run_simulation()
         'Position', [360 18 150 28], 'HorizontalAlignment', 'left', 'BackgroundColor', 'w', ...
         'FontWeight', 'bold');
 
-    panelInputs = uipanel('Parent', fig, 'Title', 'Initial conditions', 'Units', 'pixels', 'Position', [930 350 530 370]);
+    panelInputs = uipanel('Parent', fig, 'Title', 'Initial conditions', 'Units', 'pixels', 'Position', [940 380 520 350]);
     inputs = struct();
-    inputs.lat = make_edit(panelInputs, 'Latitude', 15, 325, '36.5');
-    inputs.lon = make_edit(panelInputs, 'Longitude', 175, 325, '-87.3');
-    inputs.alt = make_edit(panelInputs, 'Elevation (m)', 335, 325, '100');
-    inputs.day = make_edit(panelInputs, 'Day of year', 15, 280, '172');
-    inputs.month = make_edit(panelInputs, 'Month', 175, 280, '6');
-    inputs.year = make_edit(panelInputs, 'Year', 335, 280, '2024');
-    inputs.hour = make_edit(panelInputs, 'Hour', 15, 235, '12');
-    inputs.minute = make_edit(panelInputs, 'Minute', 175, 235, '0');
-    inputs.ambient = make_edit(panelInputs, 'Ambient C', 335, 235, '25');
-    inputs.wind = make_edit(panelInputs, 'Wind (m/s)', 15, 190, '4');
-    inputs.winddir = make_edit(panelInputs, 'Wind dir', 175, 190, '180');
-    inputs.humidity = make_edit(panelInputs, 'Humidity', 335, 190, '0.5');
-    inputs.irradiance = make_edit(panelInputs, 'Irradiance', 15, 145, '850');
-    inputs.cloud = make_edit(panelInputs, 'Cloud cover', 175, 145, '0.1');
-    inputs.pressure = make_edit(panelInputs, 'Pressure (Pa)', 335, 145, '101325');
-    inputs.pitch = make_edit(panelInputs, 'Pitch (deg)', 15, 100, '0');
-    inputs.yaw = make_edit(panelInputs, 'Yaw (deg)', 175, 100, '0');
-    inputs.roll = make_edit(panelInputs, 'Roll (deg)', 335, 100, '0');
-    inputs.z = make_edit(panelInputs, 'Height z (m)', 15, 55, '1.25');
-    inputs.period = make_edit(panelInputs, 'Update period (s)', 175, 55, '0.5');
+    inputs.lat = make_edit(panelInputs, 'Latitude', 15, 290, '36.5');
+    inputs.lon = make_edit(panelInputs, 'Longitude', 175, 290, '-87.3');
+    inputs.alt = make_edit(panelInputs, 'Elevation (m)', 335, 290, '100');
+    inputs.day = make_edit(panelInputs, 'Day of year', 15, 245, '172');
+    inputs.month = make_edit(panelInputs, 'Month', 175, 245, '6');
+    inputs.year = make_edit(panelInputs, 'Year', 335, 245, '2024');
+    inputs.hour = make_edit(panelInputs, 'Hour', 15, 200, '12');
+    inputs.minute = make_edit(panelInputs, 'Minute', 175, 200, '0');
+    inputs.ambient = make_edit(panelInputs, 'Ambient C', 335, 200, '25');
+    inputs.wind = make_edit(panelInputs, 'Wind (m/s)', 15, 155, '4');
+    inputs.winddir = make_edit(panelInputs, 'Wind dir', 175, 155, '180');
+    inputs.humidity = make_edit(panelInputs, 'Humidity', 335, 155, '0.5');
+    inputs.irradiance = make_edit(panelInputs, 'Irradiance', 15, 110, '850');
+    inputs.cloud = make_edit(panelInputs, 'Cloud cover', 175, 110, '0.1');
+    inputs.pressure = make_edit(panelInputs, 'Pressure (Pa)', 335, 110, '101325');
+    inputs.pitch = make_edit(panelInputs, 'Pitch (deg)', 15, 65, '0');
+    inputs.yaw = make_edit(panelInputs, 'Yaw (deg)', 175, 65, '0');
+    inputs.roll = make_edit(panelInputs, 'Roll (deg)', 335, 65, '0');
+    inputs.z = make_edit(panelInputs, 'Height z (m)', 15, 20, '1.25');
+    inputs.period = make_edit(panelInputs, 'Update period (s)', 175, 20, '0.5');
 
-    panelSnapshot = uipanel('Parent', fig, 'Title', 'Live snapshot', 'Units', 'pixels', 'Position', [930 20 530 310]);
-    txtPose = make_output(panelSnapshot, 'Current pose', [15 185 240 105]);
-    txtPred = make_output(panelSnapshot, 'PINN vs RK4TRAN', [270 185 245 105]);
-    txtReward = make_output(panelSnapshot, 'Reward breakdown', [15 85 240 85]);
-    txtDecision = make_output(panelSnapshot, 'Decision trace', [270 15 245 155]);
-    txtDrift = make_output(panelSnapshot, 'Drift / trust', [15 15 240 55]);
+    panelSnapshot = uipanel('Parent', fig, 'Title', 'Live snapshot', 'Units', 'pixels', 'Position', [940 20 520 350]);
+    txtPose = make_output(panelSnapshot, 'Current pose', [15 220 240 105]);
+    txtPred = make_output(panelSnapshot, 'PINN vs RK4TRAN', [270 220 235 105]);
+    txtReward = make_output(panelSnapshot, 'Reward breakdown', [15 95 240 115]);
+    txtDecision = make_output(panelSnapshot, 'Decision trace', [270 15 235 195]);
+    txtDrift = make_output(panelSnapshot, 'Drift / trust', [15 15 240 70]);
 
     [geom, twin] = build_twin(axTwin, here);
 
@@ -222,7 +223,10 @@ function run_simulation()
             title(app.axDrift, 'PINN vs RK4TRAN drift');
             title(app.axPose, 'Pose history');
             xlabel(app.axReward, 'Step'); ylabel(app.axReward, 'Reward'); grid(app.axReward, 'on'); hold(app.axReward, 'on');
-            xlabel(app.axDrift, 'Step'); ylabel(app.axDrift, 'Drift'); grid(app.axDrift, 'on'); hold(app.axDrift, 'on');
+            xlabel(app.axDrift, 'Step'); 
+            yyaxis(app.axDrift, 'left'); ylabel(app.axDrift, '\DeltaT (K)');
+            yyaxis(app.axDrift, 'right'); ylabel(app.axDrift, '\Delta\eta');
+            grid(app.axDrift, 'on'); hold(app.axDrift, 'on');
             xlabel(app.axPose, 'Step'); ylabel(app.axPose, 'Degrees / meters'); grid(app.axPose, 'on'); hold(app.axPose, 'on');
         end
         guidata(fig, app);
@@ -281,9 +285,13 @@ function run_simulation()
         legend(app.axReward, {'total','capture','-temp','-correction'}, 'Location', 'best');
         grid(app.axReward, 'on');
 
-        plot(app.axDrift, app.history.steps, app.history.driftT, '-b', 'LineWidth', 1.2);
-        plot(app.axDrift, app.history.steps, app.history.driftEta, '-r', 'LineWidth', 1.2);
-        legend(app.axDrift, {'\DeltaT (K)','\Delta\eta'}, 'Location', 'best');
+        yyaxis(app.axDrift, 'left');
+        p1 = plot(app.axDrift, app.history.steps, app.history.driftT, '-b', 'LineWidth', 1.2);
+        ylabel(app.axDrift, '\DeltaT (K)');
+        yyaxis(app.axDrift, 'right');
+        p2 = plot(app.axDrift, app.history.steps, app.history.driftEta, '-r', 'LineWidth', 1.2);
+        ylabel(app.axDrift, '\Delta\eta');
+        legend(app.axDrift, [p1, p2], {'\DeltaT (K)','\Delta\eta'}, 'Location', 'best');
         grid(app.axDrift, 'on');
 
         plot(app.axPose, app.history.steps, app.history.pitch, '-b');
