@@ -10,6 +10,8 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
+from models import PINNSurrogate  # Instead of: from ..models import PINNSurrogate
+
 import numpy as np
 import torch
 from torch import Tensor
@@ -135,7 +137,6 @@ class PINNValidator:
             checkpoint_path: Path to pre-trained PINN checkpoint
             device: Device to run inference on
         """
-        from ..models import PINNSurrogate
 
         self.device = device
         self.checkpoint_path = Path(checkpoint_path)

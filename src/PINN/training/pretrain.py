@@ -15,8 +15,8 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from ..data.uncertainty import UncertaintyProcessor
-from ..models import PINNSurrogate
+from data.uncertainty import UncertaintyProcessor
+from models import PINNSurrogate
 
 
 def weighted_mse_loss(
