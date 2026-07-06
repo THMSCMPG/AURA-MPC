@@ -133,53 +133,142 @@ program AURA_MFP
     use, intrinsic :: ISO_C_BINDING
     implicit none
 
-    ! --- grid sample counts ---
-    integer, parameter :: N_LAZY       = 50
-    integer, parameter :: N_SPACIOUS   = 200
-    integer, parameter :: N_COMFORTABLE= 1000
-    integer, parameter :: N_CRAMPED    = 5000
+    ! --- grid sample counts (scaled for diversity) ---
+    integer, parameter :: N_LAZY       = 200
+    integer, parameter :: N_SPACIOUS   = 2000
+    integer, parameter :: N_COMFORTABLE= 10000
+    integer, parameter :: N_CRAMPED    = 50000
 
-    ! --- boundary conditions ---
-    real(c_double), parameter :: BC_TAMB(2)    = [233.15_c_double, 323.15_c_double]  ! K (-40 to +50°C)
-    real(c_double), parameter :: BC_WIND(2)    = [0.0_c_double,    25.0_c_double  ]  ! m/s
+    ! --- boundary conditions (expanded for better coverage) ---
+    real(c_double), parameter :: BC_TAMB(2)    = [233.15_c_double, 333.15_c_double]  ! K (-40 to +60°C, expanded for hot climates)
+    real(c_double), parameter :: BC_WIND(2)    = [0.0_c_double,    30.0_c_double  ]  ! m/s (include storm winds)
     real(c_double), parameter :: BC_WINDDIR(2) = [0.0_c_double,    360.0_c_double ]  ! deg
     real(c_double), parameter :: BC_HUMID(2)   = [0.0_c_double,    1.0_c_double   ]  ! fraction
-    real(c_double), parameter :: BC_IRR(2)     = [0.0_c_double,    1361.0_c_double]  ! W/m²
+    real(c_double), parameter :: BC_IRR(2)     = [0.0_c_double,    1367.0_c_double]  ! W/m² (solar constant)
     real(c_double), parameter :: BC_CLOUD(2)   = [0.0_c_double,    1.0_c_double   ]  ! fraction
-    real(c_double), parameter :: BC_PRESS(2)   = [60000.0_c_double,101325.0_c_double]! Pa
-    real(c_double), parameter :: BC_PVH(2)     = [0.5_c_double,    5.0_c_double   ]  ! m
-    real(c_double), parameter :: BC_PITCH(2)   = [0.0_c_double,    90.0_c_double  ]  ! deg
-    real(c_double), parameter :: BC_ROLL(2)    = [-45.0_c_double,  45.0_c_double  ]  ! deg
+    real(c_double), parameter :: BC_PRESS(2)   = [50000.0_c_double,105000.0_c_double]! Pa (expanded for high altitude)
+    real(c_double), parameter :: BC_PVH(2)     = [0.1_c_double,    10.0_c_double  ]  ! m (expanded range)
+    real(c_double), parameter :: BC_PITCH(2)   = [-90.0_c_double,  90.0_c_double  ]  ! deg (added negative for south-facing north)
+    real(c_double), parameter :: BC_ROLL(2)    = [-60.0_c_double,  60.0_c_double  ]  ! deg (expanded)
     real(c_double), parameter :: BC_YAW(2)     = [-180.0_c_double, 180.0_c_double ]  ! deg
 
-    ! location and time string pools for lazy sampling
-    integer, parameter :: N_LOC = 10
+    ! location and time string pools for lazy sampling (expanded for geographic diversity)
+    integer, parameter :: N_LOC = 43
     character(len=32), parameter :: LOC_POOL(N_LOC) = [ &
-        "-122.00  37.50   25.0", &  ! San Jose
-        "  -0.13  51.51   11.0", &  ! London
-        "-112.07  33.45  331.0", &  ! Phoenix
-        " 151.21 -33.87   39.0", &  ! Sydney
-        "  55.30  25.20    5.0", &  ! Dubai
-        " 139.69  35.69   40.0", &  ! Tokyo
-        " -87.63  41.88  181.0", &  ! Chicago
-        " 103.82   1.35   15.0", &  ! Singapore
-        "  28.05 -26.20 1753.0", &  ! Johannesburg
-        " -46.63 -23.55  760.0"  ]  ! São Paulo
+        ! North America
+        "-122.00  37.50   25.0         ", &  ! San Jose, CA
+        " -87.63  41.88  181.0         ", &  ! Chicago, IL
+        " -74.01  40.71   10.0         ", &  ! New York, NY
+        "-104.99  39.74 1609.0         ", &  ! Denver, CO
+        "-118.24  34.05   71.0         ", &  ! Los Angeles, CA
+        " -96.69  32.82  143.0         ", &  ! Dallas, TX
+        " -87.62  30.27   -1.0         ", &  ! New Orleans, LA
+        "-120.50  48.42  343.0         ", &  ! Spokane, WA
+        ! South America
+        " -46.63 -23.55  760.0         ", &  ! São Paulo, Brazil
+        " -68.15 -16.40 3640.0         ", &  ! La Paz, Bolivia
+        " -58.38 -34.60   25.0         ", &  ! Buenos Aires, Argentina
+        ! Europe
+        "  -0.13  51.51   11.0         ", &  ! London, UK
+        "   2.35  48.85   35.0         ", &  ! Paris, France
+        "  13.40  52.52   34.0         ", &  ! Berlin, Germany
+        "  -3.70  40.42  646.0         ", &  ! Madrid, Spain
+        "  21.01  52.23  100.0         ", &  ! Warsaw, Poland
+        ! Asia
+        " 139.69  35.69   40.0         ", &  ! Tokyo, Japan
+        " 103.82   1.35   15.0         ", &  ! Singapore
+        " 113.27  23.13   12.0         ", &  ! Hong Kong
+        " 120.16  30.27 2313.0         ", &  ! Chengdu, China
+        "  88.40  27.99 1353.0         ", &  ! Kathmandu, Nepal
+        ! Middle East & Africa
+        "  55.30  25.20    5.0         ", &  ! Dubai, UAE
+        "  46.68  24.15   48.0         ", &  ! Riyadh, Saudi Arabia
+        "  31.25  30.04   20.0         ", &  ! Cairo, Egypt
+        "  28.05 -26.20 1753.0         ", &  ! Johannesburg, South Africa
+        "  37.67   -1.28 1661.0        ", &  ! Nairobi, Kenya
+        ! Oceania
+        " 151.21 -33.87   39.0         ", &  ! Sydney, Australia
+        " 115.86 -31.95   17.0         ", &  ! Perth, Australia
+        " 144.96 -37.81   58.0         ", &  ! Melbourne, Australia
+        " 174.89 -41.29   12.0         ", &  ! Auckland, New Zealand
+        ! Southern Africa
+        "  18.42 -34.03   44.0         ", &  ! Cape Town, South Africa
+        ! Additional strategic locations
+        " -43.17 -22.91    2.0         ", &  ! Rio de Janeiro, Brazil
+        " -51.52 -25.43  276.0         ", &  ! Curitiba, Brazil
+        "  79.88  12.97    7.0         ", &  ! Bangalore, India
+        "  77.21  28.61  216.0         ", &  ! New Delhi, India
+        " -74.87   4.71 2640.0         ", &  ! Bogotá, Colombia
+        " 106.85 -6.21    8.0          ", &  ! Jakarta, Indonesia
+        " -71.54 -12.05  505.0         ", &  ! Lima, Peru
+        " 135.52  34.69    3.0         ", &  ! Kobe, Japan
+        " 139.77  35.48   40.0         ", &  ! Tokyo extended
+        " -79.53  -0.22 2850.0         ", &  ! Quito, Ecuador
+        " 151.20 -33.86  100.0         ", &  ! Sydney extended
+        "  25.74  -1.95 1650.0         "  ]  ! Kampala, Uganda
 
-    integer, parameter :: N_TIME = 12
+    integer, parameter :: N_TIME = 48
     character(len=24), parameter :: TIME_POOL(N_TIME) = [ &
-        " 0  6  15  1 2024", &   ! dawn, Jan
+        ! January (day 15)
+        " 0  6  15  1 2024", &   ! 6 AM
+        " 0  9  15  1 2024", &   ! 9 AM
+        " 0 12  15  1 2024", &   ! noon
+        " 0 15  15  1 2024", &   ! 3 PM
+        ! February (day 46)
+        " 0  6  46  2 2024", &
         " 0  9  46  2 2024", &
-        " 0 12  75  3 2024", &   ! noon, Mar equinox
+        " 0 12  46  2 2024", &
+        " 0 15  46  2 2024", &
+        ! March equinox (day 79)
+        " 0  6  79  3 2024", &
+        " 0  9  79  3 2024", &
+        " 0 12  79  3 2024", &
+        " 0 15  79  3 2024", &
+        ! April (day 105)
+        " 0  6 105  4 2024", &
+        " 0  9 105  4 2024", &
+        " 0 12 105  4 2024", &
         " 0 15 105  4 2024", &
-        " 0 10 135  5 2024", &
-        " 0 13 172  6 2024", &   ! June solstice
-        " 0 11 202  7 2024", &
-        " 0 14 228  8 2024", &
-        " 0  9 266  9 2024", &   ! Sep equinox
-        " 0 16 299 10 2024", &
-        " 0  8 325 11 2024", &
-        " 0 12 355 12 2024"  ]  ! noon, Dec solstice
+        ! May (day 135)
+        " 0  6 135  5 2024", &
+        " 0  9 135  5 2024", &
+        " 0 12 135  5 2024", &
+        " 0 15 135  5 2024", &
+        ! June solstice (day 172)
+        " 0  6 172  6 2024", &
+        " 0  9 172  6 2024", &
+        " 0 12 172  6 2024", &
+        " 0 15 172  6 2024", &
+        ! July (day 202)
+        " 0  6 202  7 2024", &
+        " 0  9 202  7 2024", &
+        " 0 12 202  7 2024", &
+        " 0 15 202  7 2024", &
+        ! August (day 228)
+        " 0  6 228  8 2024", &
+        " 0  9 228  8 2024", &
+        " 0 12 228  8 2024", &
+        " 0 15 228  8 2024", &
+        ! September equinox (day 266)
+        " 0  6 266  9 2024", &
+        " 0  9 266  9 2024", &
+        " 0 12 266  9 2024", &
+        " 0 15 266  9 2024", &
+        ! October (day 299)
+        " 0  6 299 10 2024", &
+        " 0  9 299 10 2024", &
+        " 0 12 299 10 2024", &
+        " 0 15 299 10 2024", &
+        ! November (day 325)
+        " 0  6 325 11 2024", &
+        " 0  9 325 11 2024", &
+        " 0 12 325 11 2024", &
+        " 0 15 325 11 2024", &
+        ! December solstice (day 355)
+        " 0  6 355 12 2024", &
+        " 0  9 355 12 2024", &
+        " 0 12 355 12 2024", &
+        " 0 15 355 12 2024"  ]
 
     ! working variables
     integer :: i, funit
@@ -187,6 +276,11 @@ program AURA_MFP
     character(len=32) :: loc_str, time_str
     real(c_double) :: T_ss, eta_ss
     real(c_double), allocatable :: work_out(:,:)
+    ! MC parameters
+    integer, parameter :: N_MC_SPACIOUS    = 100
+    integer, parameter :: N_MC_COMFORTABLE = 500
+    integer, parameter :: N_MC_CRAMPED     = 1000
+    real(c_double), parameter :: MC_SIGMA_FRAC = 0.05_c_double  ! 5% perturbation
 
     !=======================================================================
     ! BLOCK 3: lazy data — one CSV per independent variable
@@ -210,13 +304,13 @@ program AURA_MFP
     print *, "lazy: 13 files written to lazy/"
 
     !=======================================================================
-    ! BLOCK 4: working data — 3 grid densities
+    ! BLOCK 4: working data — 3 grid densities with Monte Carlo UQ
     !=======================================================================
-    call generate_working_data("work/spacious.csv",    N_SPACIOUS,    1.0e-4_c_double)
-    call generate_working_data("work/comfortable.csv", N_COMFORTABLE, 1.0e-5_c_double)
-    call generate_working_data("work/cramped.csv",     N_CRAMPED,     1.0e-6_c_double)
+    call generate_working_data("work/spacious.csv",    N_SPACIOUS,    1.0e-4_c_double, N_MC_SPACIOUS)
+    call generate_working_data("work/comfortable.csv", N_COMFORTABLE, 1.0e-5_c_double, N_MC_COMFORTABLE)
+    call generate_working_data("work/cramped.csv",     N_CRAMPED,     1.0e-6_c_double, N_MC_CRAMPED)
 
-    print *, "working: 3 files written to /"
+    print *, "working: 3 files written to work/ with MC UQ"
 
     contains
 
@@ -272,20 +366,20 @@ program AURA_MFP
         v = lo + r * (hi - lo)
     end function rand_in
 
-    ! Generate N working data samples at a given ODE tolerance, write to filename
-    subroutine generate_working_data(filename, n, tol)
+    ! Generate N working data samples at a given ODE tolerance with MC UQ, write to filename
+    subroutine generate_working_data(filename, n, tol, n_mc)
         character(len=*), intent(in) :: filename
-        integer,          intent(in) :: n
+        integer,          intent(in) :: n, n_mc
         real(c_double),   intent(in) :: tol
 
         integer          :: u, i, loc_idx, time_idx
-        real(c_double)   :: ic(2)
+        real(c_double)   :: ic(2), ic_sigma(2)
         real(c_double)   :: r
-     
+      
         open(newunit=u, file=filename, status='replace', action='write')
         write(u, '(A)') "location,time,T_amb,wind_speed,wind_dir,humidity," // &
                          "irradiance,cloud_cover,pressure,pv_height,pitch," // &
-                         "roll,yaw,T_operating,eta"
+                         "roll,yaw,T_operating,T_operating_sigma,eta,eta_sigma"
 
         call random_seed()
 
@@ -324,13 +418,16 @@ program AURA_MFP
             ! read back final state from tmp file
             call read_last_row(".rk45_tmp.csv", ic)
 
-            ! --- write row ---
-            write(u, '(A,",",A,11(",",F12.4),",",F10.4,",",F8.6)') &
+            ! --- compute MC uncertainty bounds at final state ---
+            call mc_sigma_bounds(pv_ode, 600.0_c_double, ic, MC_SIGMA_FRAC, n_mc, ic, ic_sigma)
+
+            ! --- write row with uncertainty columns ---
+            write(u, '(A,",",A,11(",",F12.4),4(",",F12.6))') &
                 trim(LOC_POOL(loc_idx)), trim(TIME_POOL(time_idx)), &
                 env_T_amb, env_wind, env_winddir, env_humid, &
                 env_irr, env_cloud, env_press, env_pv_h, &
                 env_pitch, env_roll, env_yaw, &
-                ic(1), ic(2)   ! T_operating, eta at t=600s
+                ic(1), ic_sigma(1), ic(2), ic_sigma(2)   ! T_operating, T_sigma, eta, eta_sigma
         end do
 
         close(u)
