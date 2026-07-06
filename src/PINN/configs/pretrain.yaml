@@ -1,0 +1,43 @@
+# PINN Pre-training Configuration
+# Supervised learning on RK4TRAN synthetic data
+
+paths:
+  csv_data_dir: ../RK4TRAN/work/  # Points to RK4TRAN output
+  output_dir: ./outputs/pretrain
+  checkpoints_dir: ./outputs/pretrain/checkpoints
+  logs_dir: ./outputs/pretrain/logs
+
+data:
+  train_split: 0.80
+  val_split: 0.10
+  test_split: 0.10
+  batch_size: 64
+  num_workers: 4
+  seed: 42
+  normalize: true
+
+model:
+  input_dim: 18  # 7 weather + 4 panel state + 3 location + 4 time
+  hidden_dim: 128
+  num_residual_blocks: 4
+  num_outputs: 4  # T_operating, T_operating_sigma, eta, eta_sigma
+  dropout: 0.1
+
+training:
+  epochs: 100
+  learning_rate: 1.0e-3
+  weight_decay: 1.0e-4
+  warmup_epochs: 5
+  checkpoint_every: 10
+
+optimization:
+  scheduler: cosine  # cosine, linear, step
+  cosine_eta_min: 1.0e-6
+  gradient_clip: 1.0
+
+uncertainty:
+  strategy: weighted  # weighted, augment, keep
+  include_sigma: true
+
+device: cuda  # cuda or cpu
+mixed_precision: false
