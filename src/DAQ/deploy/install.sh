@@ -139,6 +139,25 @@ WRAP
     elif [[ "${DRY_RUN}" -eq 1 ]]; then
         run touch "${ENV_DIR}/bridge.env"
     fi
+
+    # Seed a *template* station.env (commented out) — the daemon service
+    # requires AURA_STATION_LAT/AURA_STATION_LON (no `-` prefix on its
+    # EnvironmentFile=, so it fails to start rather than guessing a
+    # location). We deliberately do NOT invent coordinates here: an
+    # installer must fill these in from an actual site survey before
+    # starting aura-edge-daemon.
+    if [[ "${DRY_RUN}" -eq 0 ]] && [[ ! -f "${ENV_DIR}/station.env" ]]; then
+        cat > "${ENV_DIR}/station.env" <<'STATIONENV'
+# Fixed-install station coordinates for pi.daemon (no GPS on the BOM).
+# Uncomment and set both before starting aura-edge-daemon.service:
+# AURA_STATION_LAT=36.17
+# AURA_STATION_LON=-86.78
+STATIONENV
+        run chmod 0644 "${ENV_DIR}/station.env"
+        info "wrote template ${ENV_DIR}/station.env — edit it with real site coordinates before starting aura-edge-daemon"
+    elif [[ "${DRY_RUN}" -eq 1 ]]; then
+        run touch "${ENV_DIR}/station.env"
+    fi
 }
 
 # ─────────────────────────────────────────────────────────────────────

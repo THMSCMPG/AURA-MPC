@@ -8,6 +8,14 @@ Reads either:
 Each packet is re-dispatched through the same ``pi.dispatch.Dispatcher``
 machinery the live daemon uses, optionally at a configurable speed
 multiplier so long runs can be replayed quickly for debugging.
+
+.. note:: Schema fix (AURA-MPC wiring pass)
+    Binary-fixture replay now reuses ``pi.daemon._frame_to_pinn_packet`` —
+    the same current-schema (``build_sensor_packet``) mapping the live
+    daemon uses — instead of a second, separately-maintained call into the
+    deprecated ``build_packet``. Because the raw frame has no GPS, ``--lat``/
+    ``--lon`` are required when replaying a ``.bin`` fixture (JSONL replay
+    doesn't need them — the packets already carry their own ``lat``/``lon``).
 """
 
 from __future__ import annotations
@@ -19,8 +27,8 @@ import time
 from pathlib import Path
 
 from pi.calibration    import Calibration
+from pi.daemon         import _frame_to_pinn_packet
 from pi.dispatch       import Dispatcher
-from pi.packet_builder import build_packet
 from pi.serial_reader  import SerialReader
 
 
@@ -32,23 +40,15 @@ def _iter_jsonl(path: Path):
                 yield json.loads(line)
 
 
-def _iter_binary(path: Path, cal: Calibration):
+def _iter_binary(path: Path, cal: Calibration, *, lat: float, lon: float):
     with SerialReader.from_file(str(path)) as reader:
         for frame in reader:
             if frame is None:
                 continue
-            flags = frame["fault_flags"]
-            speed, direction = cal.anemometer(
-                frame["anemometer_speed_x100"], frame["anemometer_dir_deg"], flags,
-            )
-            yield build_packet(
-                timestamp_ms=frame["timestamp_ms"],
-                irradiance_w_m2=cal.pyranometer(frame["pyranometer_raw"], flags),
-                thermocouples_c=cal.thermocouple(frame["thermocouple_raw"], flags),
-                wind_speed_m_s=speed,
-                wind_direction_deg=direction,
-                fault_flags=flags,
-                image_path=None,
+            yield _frame_to_pinn_packet(
+                frame, cal,
+                lat=lat, lon=lon,
+                t_s=float(frame["timestamp_ms"]) / 1000.0,
             )
 
 
@@ -62,13 +62,19 @@ def main(argv=None) -> int:
     p.add_argument("--output", default=None)
     p.add_argument("--host",   default="127.0.0.1")
     p.add_argument("--port-out", type=int, default=9000)
+    p.add_argument("--lat", type=float, default=None,
+                   help="Station latitude — required when --source is a .bin fixture "
+                        "(the raw frame has no GPS; JSONL sources already carry lat/lon).")
+    p.add_argument("--lon", type=float, default=None)
     args = p.parse_args(argv)
 
     if not args.source.exists():
         p.error(f"source not found: {args.source}")
 
     if args.source.suffix == ".bin":
-        packets = _iter_binary(args.source, Calibration())
+        if args.lat is None or args.lon is None:
+            p.error("--lat and --lon are required when replaying a .bin fixture")
+        packets = _iter_binary(args.source, Calibration(), lat=args.lat, lon=args.lon)
     else:
         packets = _iter_jsonl(args.source)
 

@@ -2,23 +2,40 @@
 
 Reads newline-delimited JSON ``SensorPacket`` records from an input
 source (by default ``sys.stdin``, which is what the daemon pipes into
-us) and forwards them to the PINN-AURA-MFP orchestrator via one of
-three transports:
+us) and forwards them to the decision layer via one of three transports:
 
-* ``subprocess_pipe`` – primary mode.  Spawns ::
+* ``subprocess_pipe`` – spawns ::
 
       python -m scripts.predict --mode live --checkpoint $AURA_EDGE_MODEL_PATH
 
   as a subprocess (``cwd=$AURA_EDGE_PINN_ROOT``), pipes JSON lines to
-  its stdin, and reads back ``OrchestrationCommand`` JSON lines from
-  its stdout.
+  its stdin, and reads back command JSON lines from its stdout.
+
+  .. warning:: **Currently broken.** ``scripts.predict`` does not exist
+     in the present ``src/PINN`` tree (see ``src/PINN/scripts/`` — only
+     ``run_pretrain.py`` / ``run_finetune.py`` / ``run_sandbox.py`` /
+     ``test*.py``). Do not point ``AURA_EDGE_BRIDGE_MODE`` at
+     ``subprocess_pipe`` until a ``--mode live`` CLI entry point is
+     built, or use one of the two socket modes below instead.
 
 * ``unix_socket`` – connect to ``/var/run/aura_sensors.sock`` (or
   ``AURA_EDGE_SOCKET_PATH``); the orchestrator is configured to read
   from it.  Use for multi-process deployments on the same host.
 
-* ``tcp_socket`` – same but TCP for remote orchestrators; ``host:port``
+* ``tcp_socket`` – same but TCP, for a remote workstation; ``host:port``
   come from ``AURA_EDGE_TCP_HOST`` / ``AURA_EDGE_TCP_PORT``.
+
+  **This is the recommended, working transport as of the AURA-MPC
+  EDGE/PINN/RK4TRAN wiring pass.** Point it at
+  ``sandbox.decision_server`` (``src/PINN/sandbox/decision_server.py``),
+  which runs on the workstation, closes
+  ``EDGE -> PINN -> RK4TRAN -> PINN -> DECISION`` per packet, and
+  replies with a schema_version "2.0" pitch/yaw/roll/z actuator command
+  (see ``pi/actuator_stub.py`` and ``sandbox/edge_adapter.py``). Start it
+  with e.g. ``python -m sandbox.decision_server --config configs/sandbox.yaml
+  --port 8766`` on the workstation, then run this bridge with
+  ``AURA_EDGE_BRIDGE_MODE=tcp_socket AURA_EDGE_TCP_HOST=<workstation>
+  AURA_EDGE_TCP_PORT=8766``.
 
 For every ``OrchestrationCommand`` received on the return path the
 bridge:

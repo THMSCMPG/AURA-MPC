@@ -9,6 +9,7 @@ from typing import Any
 
 import yaml
 
+from . import scenarios as _scenarios
 from .runtime import ClosedLoopRuntime
 
 
@@ -141,3 +142,28 @@ class MatlabSimulationBridge:
 
     def history_json(self) -> str:
         return json.dumps(self.runtime.history())
+
+    # ── Scenario presets (for the MATLAB "Scenario preset" dropdown) ──────
+    def list_scenarios_json(self) -> str:
+        """Return ``{name: description}`` for every named preset."""
+        return json.dumps(
+            {name: _scenarios.SCENARIOS[name].get("description", "") for name in _scenarios.list_scenarios()}
+        )
+
+    def scenario_conditions_json(self, name: str) -> str:
+        """Return one preset's condition fields, ready to fill MATLAB's edit boxes."""
+        return json.dumps(_scenarios.get_scenario(str(name)))
+
+    # ── Live conditions injection (EDGE feed, or MATLAB-side "what if") ───
+    def inject_conditions_json(self, conditions_json: str) -> None:
+        """Overwrite the running episode's conditions ahead of the next ``step``.
+
+        Mirrors ``ClosedLoopRuntime.inject_conditions`` for MATLAB callers
+        that want to drive the loop from a live EDGE packet (translated
+        via ``sandbox.edge_adapter.edge_packet_to_conditions``) or from an
+        ad hoc "what if the wind picked up" edit, without a full reset.
+        """
+        conditions = _loads_maybe(conditions_json)
+        if conditions is None:
+            raise ValueError("inject_conditions_json requires a non-empty JSON object")
+        self.runtime.inject_conditions(conditions)

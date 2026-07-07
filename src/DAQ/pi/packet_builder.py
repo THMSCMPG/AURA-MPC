@@ -1,22 +1,39 @@
 """pi/packet_builder.py – Assemble SensorPacket JSON matching the PINN contract.
 
-The PINN-AURA-MFP orchestrator consumes ``SensorPacket`` JSON objects
-one per sample interval.  The schema is intentionally flat and stable
-across protocol versions – new fields append at the bottom.
+The PINN-AURA-MFP decision layer (``sandbox.decision_server`` as of the
+AURA-MPC EDGE/PINN/RK4TRAN wiring pass) consumes ``SensorPacket`` JSON
+objects one per sample interval, in the schema below.
 
-SensorPacket schema (v1.0)
---------------------------
+.. note:: Cleanup (AURA-MPC wiring pass)
+    This file used to also carry a deprecated v1.0 schema
+    (``build_packet`` / ``validate_packet`` / ``SENSOR_PACKET_SCHEMA``,
+    with ``irradiance_w_m2`` / ``thermocouples_c`` / ``wind_direction_deg``
+    fields) alongside the current one below. Every caller in this repo
+    had already migrated to ``build_sensor_packet`` /
+    ``PINN_SENSOR_PACKET_SCHEMA`` except ``pi.daemon`` and two scripts
+    (``pi.scripts.replay``, ``pi.scripts.health_check``), which were
+    fixed in the same pass this file was cleaned up in. The deprecated
+    functions have been removed rather than kept around as dead code —
+    if you're reading an old integration that still calls
+    ``build_packet``/``validate_packet``, it needs to move to the
+    schema below.
+
+SensorPacket schema
+--------------------
 
     {
-      "schema_version":      "1.0",
-      "timestamp_utc":       "<ISO-8601 UTC>",
-      "timestamp_ms":        <uint64>,          // echo of sensor clock
-      "irradiance_w_m2":     <float | null>,    // null ⇒ sensor fault
-      "thermocouples_c":     [<float | null> × 4],
-      "wind_speed_m_s":      <float | null>,
-      "wind_direction_deg":  <float | null>,
-      "fault_flags":         <uint16>,          // bitmask (see below)
-      "image_path":          <str | null>       // populated by Edge-Batch B
+      "timestamp":       "<ISO-8601 UTC, millisecond precision>",
+      "t_s":              <float>,               // seconds elapsed (monotonic-ish)
+      "G_poa":            <float | null>,         // plane-of-array irradiance, W/m^2
+      "T_amb":            <float | null>,         // ambient temperature, deg C
+      "WS":               <float | null>,         // wind speed, m/s
+      "CC":               <float | null>,         // cloud cover [0,1] — orchestrator-supplied
+      "lat":              <float>,                // station latitude
+      "lon":              <float>,                // station longitude
+      "sky_image_path":   <str | null>,
+      "pose":             <object | array | null>,// orchestrator-supplied
+      "fault_flags":      <uint16>,                // bitmask (see below)
+      "edge_version":     <str>
     }
 
 Fault-flag bitmask
@@ -27,168 +44,22 @@ Fault-flag bitmask
     0x0004  thermocouple 1     0x0040  RTC
     0x0008  thermocouple 2     0x8000  persistent-fault indicator
 
+Two fields EDGE's current BOM cannot measure directly are always ``null``
+on the edge side and filled in downstream: ``CC`` (cloud cover) and
+``pose`` are always produced by the orchestrator/decision layer. Fields
+the BOM has no sensor for at all (humidity, pressure, wind direction,
+station altitude) aren't part of this wire schema — see
+``sandbox.edge_adapter.STATION_DEFAULTS`` for how the decision layer
+fills those in.
+
 The JSON Schema (draft-2020-12) that validates these packets is exposed
-as :data:`SENSOR_PACKET_SCHEMA` and written to
-``docs/sensor_packet.schema.json`` during ``pi.daemon --help``.
+as :data:`PINN_SENSOR_PACKET_SCHEMA`.
 """
 
 from __future__ import annotations
 
-import warnings
 from datetime import datetime, timezone
 from typing import Any, Optional
-
-SCHEMA_VERSION = "1.0"
-
-
-# ══════════════════════════════════════════════════════════════════════
-# DEPRECATED — retained only for backwards compatibility with pre-Batch-A
-# callers.  The PINN-AURA-MFP orchestrator consumes ``build_sensor_packet()``
-# / ``PINN_SENSOR_PACKET_SCHEMA`` ONLY.  New code must not call
-# ``build_packet()``.
-# ══════════════════════════════════════════════════════════════════════
-
-SENSOR_PACKET_SCHEMA: dict = {
-    "$schema": "https://json-schema.org/draft/2020-12/schema",
-    "$id":     "https://aura-mfp.example.com/sensor_packet.schema.json",
-    "title":   "SensorPacket",
-    "type":    "object",
-    "additionalProperties": False,
-    "required": [
-        "schema_version", "timestamp_utc", "timestamp_ms",
-        "irradiance_w_m2", "thermocouples_c",
-        "wind_speed_m_s", "wind_direction_deg",
-        "fault_flags", "image_path",
-    ],
-    "properties": {
-        "schema_version":     {"const": SCHEMA_VERSION},
-        "timestamp_utc":      {"type": "string", "format": "date-time"},
-        "timestamp_ms":       {"type": "integer", "minimum": 0},
-        "irradiance_w_m2":    {"type": ["number", "null"]},
-        "thermocouples_c": {
-            "type": "array",
-            "minItems": 4,
-            "maxItems": 4,
-            "items": {"type": ["number", "null"]},
-        },
-        "wind_speed_m_s":     {"type": ["number", "null"], "minimum": 0},
-        "wind_direction_deg": {
-            "oneOf": [
-                {"type": "null"},
-                {"type": "number", "minimum": 0, "maximum": 360},
-            ],
-        },
-        "fault_flags":        {"type": "integer", "minimum": 0, "maximum": 0xFFFF},
-        "image_path":         {"type": ["string", "null"]},
-    },
-}
-
-
-def build_packet(
-    *,
-    timestamp_ms: int,
-    irradiance_w_m2: Optional[float],
-    thermocouples_c,
-    wind_speed_m_s: Optional[float],
-    wind_direction_deg: Optional[float],
-    fault_flags: int,
-    image_path: Optional[str] = None,
-    now_utc: Optional[datetime] = None,
-) -> dict[str, Any]:
-    """Return a SensorPacket dict.
-
-    .. deprecated::
-        Use :func:`build_sensor_packet` instead.  This function is retained
-        only for backwards compatibility with pre-Batch-A callers.
-
-    ``now_utc`` is injectable for deterministic tests and replay; when
-    ``None`` the current wall-clock UTC time is used.
-    """
-    warnings.warn(
-        "build_packet() is deprecated — use build_sensor_packet() instead. "
-        "The PINN-AURA-MFP orchestrator consumes build_sensor_packet() / "
-        "PINN_SENSOR_PACKET_SCHEMA ONLY.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    if now_utc is None:
-        now_utc = datetime.now(timezone.utc)
-    return {
-        "schema_version":     SCHEMA_VERSION,
-        "timestamp_utc":      now_utc.isoformat(),
-        "timestamp_ms":       int(timestamp_ms),
-        "irradiance_w_m2":    None if irradiance_w_m2 is None else float(irradiance_w_m2),
-        "thermocouples_c":    [None if v is None else float(v) for v in thermocouples_c],
-        "wind_speed_m_s":     None if wind_speed_m_s is None else float(wind_speed_m_s),
-        "wind_direction_deg": None if wind_direction_deg is None else float(wind_direction_deg),
-        "fault_flags":        int(fault_flags) & 0xFFFF,
-        "image_path":         image_path,
-    }
-
-
-def validate_packet(packet: dict) -> None:
-    """Validate *packet* against :data:`SENSOR_PACKET_SCHEMA`.
-
-    Uses ``jsonschema`` when available; otherwise falls back to a
-    lightweight hand-rolled checker so the daemon still runs without the
-    optional dependency.  Raises ``ValueError`` on any violation.
-    """
-    try:
-        import jsonschema  # type: ignore
-    except ImportError:
-        _fallback_validate(packet)
-        return
-    try:
-        jsonschema.validate(packet, SENSOR_PACKET_SCHEMA)
-    except jsonschema.ValidationError as exc:
-        raise ValueError(f"SensorPacket schema violation: {exc.message}") from exc
-
-
-# ────────────────────────────── Fallback ──────────────────────────────
-def _fallback_validate(p: dict) -> None:
-    required = SENSOR_PACKET_SCHEMA["required"]
-    for field in required:
-        if field not in p:
-            raise ValueError(f"missing field: {field}")
-    if p["schema_version"] != SCHEMA_VERSION:
-        raise ValueError(f"bad schema_version: {p['schema_version']!r}")
-    if not isinstance(p["timestamp_utc"], str):
-        raise ValueError("timestamp_utc must be str")
-    if not isinstance(p["timestamp_ms"], int) or p["timestamp_ms"] < 0:
-        raise ValueError("timestamp_ms must be non-negative int")
-    _num_or_none(p, "irradiance_w_m2")
-    tcs = p["thermocouples_c"]
-    if not isinstance(tcs, list) or len(tcs) != 4:
-        raise ValueError("thermocouples_c must be list of 4")
-    for i, v in enumerate(tcs):
-        if v is not None and not isinstance(v, (int, float)):
-            raise ValueError(f"thermocouples_c[{i}] must be number or null")
-    _num_or_none(p, "wind_speed_m_s")
-    wd = p["wind_direction_deg"]
-    if wd is not None and not (isinstance(wd, (int, float)) and 0 <= wd <= 360):
-        raise ValueError("wind_direction_deg out of range")
-    ff = p["fault_flags"]
-    if not isinstance(ff, int) or not (0 <= ff <= 0xFFFF):
-        raise ValueError("fault_flags must be uint16")
-    ip = p["image_path"]
-    if ip is not None and not isinstance(ip, str):
-        raise ValueError("image_path must be string or null")
-
-
-def _num_or_none(p: dict, key: str) -> None:
-    v = p[key]
-    if v is not None and not isinstance(v, (int, float)):
-        raise ValueError(f"{key} must be number or null")
-
-
-# ══════════════════════════════════════════════════════════════════════
-# PINN-AURA-MFP Batch A SensorPacket (Edge-Batch B)
-# ══════════════════════════════════════════════════════════════════════
-#
-# Schema documented verbatim in the project plan. The orchestrator
-# consumes this shape; the edge does NOT embed image bytes (too large)
-# — it ships only the path to a JPEG that the orchestrator reads over a
-# shared filesystem mount.
 
 EDGE_VERSION = "v0.1.0"
 
@@ -235,7 +106,7 @@ def build_sensor_packet(
     now_utc: Optional[datetime] = None,
     edge_version: str = EDGE_VERSION,
 ) -> dict[str, Any]:
-    """Return a PINN-AURA-MFP Batch A ``SensorPacket`` dict.
+    """Return a PINN-AURA-MFP ``SensorPacket`` dict.
 
     Fields match the project plan. ``CC`` (cloud cover) and ``pose``
     are always produced by the orchestrator and hence default to
@@ -280,6 +151,12 @@ def validate_sensor_packet(packet: dict) -> None:
         jsonschema.validate(packet, PINN_SENSOR_PACKET_SCHEMA)
     except jsonschema.ValidationError as exc:
         raise ValueError(f"PinnSensorPacket schema violation: {exc.message}") from exc
+
+
+def _num_or_none(p: dict, key: str) -> None:
+    v = p[key]
+    if v is not None and not isinstance(v, (int, float)):
+        raise ValueError(f"{key} must be number or null")
 
 
 def _fallback_validate_pinn(p: dict) -> None:

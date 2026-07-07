@@ -5,6 +5,15 @@ packets through the full calibration pipeline, and prints per-field
 pass/fail against expected operating ranges. Exits 0 on pass, 1 on
 failure.
 
+.. note:: Schema fix (AURA-MPC wiring pass)
+    ``_collect`` previously round-tripped every reading through the
+    deprecated ``build_packet`` just to pull the calibrated values back
+    out again — coupling a per-channel sanity check to a specific wire
+    schema for no reason. It now calls ``Calibration`` directly. The
+    wire-schema check itself (item 5 of ``--mock``) already validates
+    against the *current* schema via ``build_sensor_packet`` /
+    ``validate_sensor_packet`` and is unaffected by this.
+
 Usage
 -----
     python -m pi.scripts.health_check [--port /dev/serial0] [--baud 115200] [--count 10]
@@ -22,7 +31,6 @@ import time
 from pathlib import Path
 
 from pi.calibration    import Calibration
-from pi.packet_builder import build_packet
 from pi.serial_reader  import SerialReader
 
 # (field, lo, hi)
@@ -44,27 +52,20 @@ def _collect(reader: SerialReader, cal: Calibration, count: int) -> dict:
         if frame is None:
             continue
         flags = frame["fault_flags"]
-        pkt = build_packet(
-            timestamp_ms=frame["timestamp_ms"],
-            irradiance_w_m2=cal.pyranometer(frame["pyranometer_raw"], flags),
-            thermocouples_c=cal.thermocouple(frame["thermocouple_raw"], flags),
-            wind_speed_m_s=cal.anemometer(
-                frame["anemometer_speed_x100"], frame["anemometer_dir_deg"], flags,
-            )[0],
-            wind_direction_deg=cal.anemometer(
-                frame["anemometer_speed_x100"], frame["anemometer_dir_deg"], flags,
-            )[1],
-            fault_flags=flags,
+        irradiance = cal.pyranometer(frame["pyranometer_raw"], flags)
+        thermocouples = cal.thermocouple(frame["thermocouple_raw"], flags)
+        wind_speed, wind_direction = cal.anemometer(
+            frame["anemometer_speed_x100"], frame["anemometer_dir_deg"], flags,
         )
-        if pkt["irradiance_w_m2"] is not None:
-            samples["irradiance_w_m2"].append(pkt["irradiance_w_m2"])
-        for i, v in enumerate(pkt["thermocouples_c"]):
+        if irradiance is not None:
+            samples["irradiance_w_m2"].append(irradiance)
+        for i, v in enumerate(thermocouples):
             if v is not None:
                 samples[f"tc{i}_c"].append(v)
-        if pkt["wind_speed_m_s"] is not None:
-            samples["wind_speed_m_s"].append(pkt["wind_speed_m_s"])
-        if pkt["wind_direction_deg"] is not None:
-            samples["wind_direction_deg"].append(pkt["wind_direction_deg"])
+        if wind_speed is not None:
+            samples["wind_speed_m_s"].append(wind_speed)
+        if wind_direction is not None:
+            samples["wind_direction_deg"].append(wind_direction)
         seen += 1
         if seen >= count:
             break

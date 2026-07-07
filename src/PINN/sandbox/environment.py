@@ -361,6 +361,23 @@ class PanelEnv:
         )
         return obs, info
 
+    def set_conditions(self, conditions: dict[str, Any] | EpisodeConditions) -> None:
+        """Overwrite the current environmental conditions in place.
+
+        Unlike :meth:`reset`, this does **not** touch the pose, step
+        index, or discrepancy/bias history — it is the hook EDGE-driven
+        operation uses to feed each freshly-arrived sensor packet's
+        conditions into an already-running episode before the next
+        :meth:`step` call, instead of the synthetic domain-randomised
+        conditions :meth:`_sample_conditions` draws for offline training.
+        See ``sandbox.edge_adapter.edge_packet_to_conditions`` /
+        ``sandbox.decision_server`` for the caller.
+        """
+        if isinstance(conditions, EpisodeConditions):
+            self.conditions = conditions
+        else:
+            self.conditions = EpisodeConditions.from_mapping(conditions)
+
     def _clamp_and_slew(self, action: FloatArray) -> dict[str, float]:
         action = np.asarray(action, dtype=np.float32).reshape(4)
         targets = {

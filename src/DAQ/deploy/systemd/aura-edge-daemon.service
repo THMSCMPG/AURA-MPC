@@ -11,8 +11,15 @@ Group=aura-edge
 SupplementaryGroups=dialout
 
 WorkingDirectory=/opt/aura-edge
+EnvironmentFile=/etc/aura-edge/station.env
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/aura-edge/venv/bin/python -m pi.daemon --input-mode serial --port /dev/serial0 --baud 115200 --output-mode stdout
+# --lat/--lon come from AURA_STATION_LAT/AURA_STATION_LON in station.env —
+# this is a fixed install with no GPS on the BOM, so these are a one-time
+# site-survey value, not something the daemon can discover at runtime.
+# Deliberately NOT `EnvironmentFile=-...` (no leading `-`): if station.env
+# is missing, this unit should fail to start rather than silently omit
+# --lat/--lon, which pi.daemon now refuses to run without anyway.
+ExecStart=/opt/aura-edge/venv/bin/python -m pi.daemon --input-mode serial --port /dev/serial0 --baud 115200 --output-mode stdout --lat ${AURA_STATION_LAT} --lon ${AURA_STATION_LON}
 StandardOutput=journal
 StandardError=journal
 

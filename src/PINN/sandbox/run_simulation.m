@@ -12,7 +12,7 @@ function run_simulation()
     fig = figure( ...
         'Name', 'AURA-MPC Closed-Loop Simulator', ...
         'Color', 'w', ...
-        'Position', [40 40 1500 900], ...
+        'Position', [40 40 1500 960], ...
         'CloseRequestFcn', @onClose);
 
     axTwin = axes('Parent', fig, 'Units', 'pixels', 'Position', [40 340 860 520]);
@@ -52,7 +52,7 @@ function run_simulation()
     grid(axPose, 'on');
     hold(axPose, 'on');
 
-    panelControls = uipanel('Parent', fig, 'Title', 'Controls', 'Units', 'pixels', 'Position', [940 740 520 120]);
+    panelControls = uipanel('Parent', fig, 'Title', 'Controls', 'Units', 'pixels', 'Position', [940 800 520 120]);
     btnStart = uicontrol(panelControls, 'Style', 'pushbutton', 'String', 'Start', ...
         'Position', [15 55 90 35], 'FontWeight', 'bold', 'Callback', @onStart);
     btnPause = uicontrol(panelControls, 'Style', 'pushbutton', 'String', 'Pause', ...
@@ -61,6 +61,8 @@ function run_simulation()
         'Position', [215 55 90 35], 'Callback', @onReset);
     btnStep = uicontrol(panelControls, 'Style', 'pushbutton', 'String', 'Step', ...
         'Position', [315 55 90 35], 'Callback', @onStep);
+    btnPostProcess = uicontrol(panelControls, 'Style', 'pushbutton', 'String', 'Session plots', ...
+        'Position', [415 55 90 35], 'Callback', @onPostProcess);
     chkStepThrough = uicontrol(panelControls, 'Style', 'checkbox', 'String', 'Step-through mode', ...
         'Position', [15 20 150 25], 'Value', 0);
     chkLearning = uicontrol(panelControls, 'Style', 'checkbox', 'String', 'Enable policy learning', ...
@@ -68,6 +70,21 @@ function run_simulation()
     txtStatus = uicontrol(panelControls, 'Style', 'text', 'String', 'Idle', ...
         'Position', [360 18 150 28], 'HorizontalAlignment', 'left', 'BackgroundColor', 'w', ...
         'FontWeight', 'bold');
+
+    % EDGE scenario presets: mirrors the physical-regime presets defined in
+    % sandbox.scenarios (clear_sky_noon, cloud_ramp, high_wind_transient, ...).
+    % "Apply preset" only fills the Initial conditions fields below — it does
+    % not reset a running episode, so you can compare presets before committing.
+    panelScenario = uipanel('Parent', fig, 'Title', 'Scenario preset (EDGE-side conditions)', ...
+        'Units', 'pixels', 'Position', [940 730 520 65]);
+    popupScenario = uicontrol(panelScenario, 'Style', 'popupmenu', ...
+        'String', {'(loading...)'}, 'Position', [15 16 280 26]);
+    btnApplyScenario = uicontrol(panelScenario, 'Style', 'pushbutton', 'String', 'Apply preset', ...
+        'Position', [305 16 100 28], 'Callback', @onApplyScenario);
+    txtScenarioNote = uicontrol(panelScenario, 'Style', 'text', ...
+        'String', '"Apply preset" only fills the fields below; Reset/Start commits them.', ...
+        'Position', [15 2 480 14], 'HorizontalAlignment', 'left', 'BackgroundColor', 'w', ...
+        'FontAngle', 'italic', 'ForegroundColor', [0.35 0.35 0.35], 'FontSize', 8);
 
     panelInputs = uipanel('Parent', fig, 'Title', 'Initial conditions', 'Units', 'pixels', 'Position', [940 380 520 350]);
     inputs = struct();
@@ -116,6 +133,8 @@ function run_simulation()
     app.geom = geom;
     app.twin = twin;
     app.inputs = inputs;
+    app.popupScenario = popupScenario;
+    app.scenarioNames = {};
     app.chkStepThrough = chkStepThrough;
     app.chkLearning = chkLearning;
     app.txtStatus = txtStatus;
@@ -146,6 +165,13 @@ function run_simulation()
                 app.requirementsPath, ...
                 app.venvDir);
             app.pythonReady = true;
+            scenarioMap = jsondecode(char(app.bridge.list_scenarios_json()));
+            app.scenarioNames = fieldnames(scenarioMap);
+            scenarioLabels = cell(size(app.scenarioNames));
+            for si = 1:numel(app.scenarioNames)
+                scenarioLabels{si} = strrep(app.scenarioNames{si}, '_', ' ');
+            end
+            set(app.popupScenario, 'String', scenarioLabels, 'Value', 1);
         catch err
             app.bridge = [];
             app.pythonReady = false;
@@ -202,6 +228,108 @@ function run_simulation()
             return;
         end
         advance_once();
+    end
+
+    function onApplyScenario(~, ~)
+        % Fills the Initial-conditions fields from a named preset — this is
+        % the MATLAB-side stand-in for "EDGE just reported these conditions".
+        % It does not reset the running episode; click Reset/Start after to
+        % commit it, or compare a few presets side by side first.
+        app = guidata(fig);
+        if isempty(app.scenarioNames)
+            warndlg('Scenario presets are not loaded yet (Python runtime still starting up).', ...
+                'Not ready', 'modal');
+            return;
+        end
+        idx = get(app.popupScenario, 'Value');
+        name = app.scenarioNames{idx};
+        if ~ensure_bridge_ready()
+            return;
+        end
+        try
+            preset = jsondecode(char(app.bridge.scenario_conditions_json(name)));
+        catch err
+            errordlg(sprintf('Could not load scenario %s:\n%s', name, err.message), ...
+                'Scenario load failed', 'modal');
+            return;
+        end
+        set(app.inputs.lat.value,       'String', num2str(preset.lat));
+        set(app.inputs.lon.value,       'String', num2str(preset.lon));
+        set(app.inputs.alt.value,       'String', num2str(preset.alt));
+        set(app.inputs.day.value,       'String', num2str(preset.day_of_year));
+        set(app.inputs.month.value,     'String', num2str(preset.month));
+        set(app.inputs.year.value,      'String', num2str(preset.year));
+        set(app.inputs.hour.value,      'String', num2str(preset.hour));
+        set(app.inputs.minute.value,    'String', num2str(preset.minute));
+        set(app.inputs.ambient.value,   'String', num2str(preset.ambient_c));
+        set(app.inputs.wind.value,      'String', num2str(preset.wind_mps));
+        set(app.inputs.winddir.value,   'String', num2str(preset.wind_dir));
+        set(app.inputs.humidity.value,  'String', num2str(preset.humidity));
+        set(app.inputs.irradiance.value,'String', num2str(preset.irradiance));
+        set(app.inputs.cloud.value,     'String', num2str(preset.cloud_cover));
+        set(app.inputs.pressure.value,  'String', num2str(preset.pressure));
+        note = '';
+        if isfield(preset, 'description')
+            note = preset.description;
+        end
+        set_status(sprintf('Preset "%s" loaded — Reset/Start to run it', strrep(name, '_', ' ')));
+        if ~isempty(note)
+            fprintf('[scenario %s] %s\n', name, note);
+        end
+    end
+
+    function onPostProcess(~, ~)
+        % Session-level post-processing: PINN vs RK4TRAN across every step
+        % this session actually validated, not just the live rolling plot.
+        app = guidata(fig);
+        h = app.history;
+        valid = ~isnan(h.rk4T) & ~isnan(h.pinnT);
+        if ~any(valid)
+            warndlg(['No validated RK4TRAN steps yet this session — run with ' ...
+                     'validation enabled for a few steps first.'], 'Nothing to plot', 'modal');
+            return;
+        end
+        ppFig = figure('Name', 'AURA-MPC session post-processing', 'Color', 'w', ...
+            'Position', [120 120 980 640]);
+
+        subplot(2, 2, 1);
+        scatter(h.pinnT(valid), h.rk4T(valid), 28, h.steps(valid), 'filled');
+        hold on;
+        lims = [min([h.pinnT(valid), h.rk4T(valid)]), max([h.pinnT(valid), h.rk4T(valid)])];
+        plot(lims, lims, 'k--');
+        hold off;
+        xlabel('PINN T_{operating} (K)'); ylabel('RK4TRAN T_{operating} (K)');
+        title('Operating temperature: PINN vs RK4TRAN');
+        cb = colorbar; ylabel(cb, 'step');
+        grid on;
+
+        subplot(2, 2, 2);
+        scatter(h.pinnEta(valid), h.rk4Eta(valid), 28, h.steps(valid), 'filled');
+        hold on;
+        lims = [min([h.pinnEta(valid), h.rk4Eta(valid)]), max([h.pinnEta(valid), h.rk4Eta(valid)])];
+        plot(lims, lims, 'k--');
+        hold off;
+        xlabel('PINN \eta'); ylabel('RK4TRAN \eta');
+        title('Efficiency: PINN vs RK4TRAN');
+        cb = colorbar; ylabel(cb, 'step');
+        grid on;
+
+        subplot(2, 2, 3);
+        histogram(h.driftT(valid), 20);
+        xlabel('RK4TRAN - PINN, T_{operating} (K)'); ylabel('count');
+        title(sprintf('Temperature discrepancy (mean=%.3f K, std=%.3f K)', ...
+            mean(h.driftT(valid)), std(h.driftT(valid))));
+        grid on;
+
+        subplot(2, 2, 4);
+        histogram(h.driftEta(valid), 20);
+        xlabel('RK4TRAN - PINN, \eta'); ylabel('count');
+        title(sprintf('Efficiency discrepancy (mean=%.5f, std=%.5f)', ...
+            mean(h.driftEta(valid)), std(h.driftEta(valid))));
+        grid on;
+
+        sgtitle(sprintf('%d of %d steps had an RK4TRAN validation this session', ...
+            sum(valid), numel(h.steps)));
     end
 
     function perform_reset(clearPlots)
@@ -271,6 +399,10 @@ function run_simulation()
             app.history.correction(end+1) = safe_nested(snapshot, {'reward_breakdown','correction_penalty'}, NaN);
             app.history.driftT(end+1) = safe_nested(snapshot, {'discrepancy','T_operating'}, NaN);
             app.history.driftEta(end+1) = safe_nested(snapshot, {'discrepancy','eta'}, NaN);
+            app.history.pinnT(end+1) = safe_nested(snapshot, {'pinn_prediction','T_operating'}, NaN);
+            app.history.pinnEta(end+1) = safe_nested(snapshot, {'pinn_prediction','eta'}, NaN);
+            app.history.rk4T(end+1) = safe_nested(snapshot, {'rk4_prediction','T_operating'}, NaN);
+            app.history.rk4Eta(end+1) = safe_nested(snapshot, {'rk4_prediction','eta'}, NaN);
             app.history.pitch(end+1) = safe_nested(snapshot, {'pose','pitch'}, NaN);
             app.history.yaw(end+1) = safe_nested(snapshot, {'pose','yaw'}, NaN);
             app.history.roll(end+1) = safe_nested(snapshot, {'pose','roll'}, NaN);
@@ -538,6 +670,10 @@ function h = empty_history()
         'correction', [], ...
         'driftT', [], ...
         'driftEta', [], ...
+        'pinnT', [], ...
+        'pinnEta', [], ...
+        'rk4T', [], ...
+        'rk4Eta', [], ...
         'pitch', [], ...
         'yaw', [], ...
         'roll', [], ...
@@ -626,9 +762,15 @@ function text = format_decision(snapshot)
     meanAction = safe_nested(snapshot, {'policy_context','action_mean'}, []);
     applied = safe_nested(snapshot, {'policy_context','action_applied'}, []);
     reason = snapshot.decision_reason;
-    text = sprintf('mode: %s\nmean action: %s\napplied action: %s\npolicy updated: %d\n\n%s', ...
+    p = snapshot.pose;
+    text = sprintf(['mode: %s\nmean action: %s\napplied action: %s\npolicy updated: %d\n\n%s\n\n' ...
+                    '-> EDGE command (pitch/yaw/roll/z, schema v2.0):\n' ...
+                    '   pitch=%+6.2f  yaw=%+6.2f  roll=%+6.2f  z=%.3f\n' ...
+                    '   [would ship over decision_server''s TCP link to the\n' ...
+                    '    workstation-hosted stepper controller, i.e. EDGE]'], ...
         ctx.mode, mat2str(meanAction, 3), mat2str(applied, 3), ...
-        logical(safe_nested(snapshot, {'policy_updated'}, false)), reason);
+        logical(safe_nested(snapshot, {'policy_updated'}, false)), reason, ...
+        p.pitch, p.yaw, p.roll, p.z);
 end
 
 function text = format_drift(snapshot)

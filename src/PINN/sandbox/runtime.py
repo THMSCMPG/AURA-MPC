@@ -224,6 +224,17 @@ class ClosedLoopRuntime:
         self._append_trace(record)
         return record
 
+    def inject_conditions(self, conditions: dict[str, Any]) -> None:
+        """Overwrite the environment's conditions ahead of the next :meth:`step`.
+
+        This is the entry point EDGE-driven operation (or a MATLAB "Use
+        EDGE feed" toggle) uses to hand a live sensor reading — already
+        translated by :func:`sandbox.edge_adapter.edge_packet_to_conditions`
+        — into a *running* episode. It does not reset pose or history;
+        it only changes what the next :meth:`step` will observe.
+        """
+        self.env.set_conditions(conditions)
+
     def latest(self) -> dict[str, Any]:
         return dict(self._latest_info)
 
