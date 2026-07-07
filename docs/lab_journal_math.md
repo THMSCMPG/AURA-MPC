@@ -8,12 +8,65 @@ This document presents the mathematical formulations, derivations, numerical met
 Using variation implementations of Runge Kutta, we are able to predict future incremental steps in behavior of the complex system. We can use synthetic data alongside real data to train the PINN. In addition to this, we can use these models to predict real time data that can feed into the PINN. By randomly shuffling the data rng alongside Monte Carlo Uncertainty Quantification techniques, we are able to produce realistic synthetic data that avoids the pitfalls of common fitting techniques.
 ### 1.1 Runge-Kutta 4 (RK4)
 
+For a state model
+
+$$\frac{d\mathbf{x}}{dt} = f(t,\mathbf{x},\mathbf{u},\boldsymbol{\theta})$$
+
+the fixed-step RK4 update over $\Delta t$ is:
+
+$$\mathbf{k}_1 = f(t_n,\mathbf{x}_n,\mathbf{u}_n,\boldsymbol{\theta})$$
+$$\mathbf{k}_2 = f\left(t_n+\frac{\Delta t}{2},\mathbf{x}_n+\frac{\Delta t}{2}\mathbf{k}_1,\mathbf{u}_n,\boldsymbol{\theta}\right)$$
+$$\mathbf{k}_3 = f\left(t_n+\frac{\Delta t}{2},\mathbf{x}_n+\frac{\Delta t}{2}\mathbf{k}_2,\mathbf{u}_n,\boldsymbol{\theta}\right)$$
+$$\mathbf{k}_4 = f\left(t_n+\Delta t,\mathbf{x}_n+\Delta t\mathbf{k}_3,\mathbf{u}_n,\boldsymbol{\theta}\right)$$
+
+$$\mathbf{x}_{n+1} = \mathbf{x}_n + \frac{\Delta t}{6}\left(\mathbf{k}_1 + 2\mathbf{k}_2 + 2\mathbf{k}_3 + \mathbf{k}_4\right)$$
+
+For the thermal submodel, a common single-state form is:
+
+$$\frac{dT_{\text{panel}}}{dt} = \frac{T_{\text{ss}} - T_{\text{panel}}}{\tau_{\text{eff}}}, \quad T_{\text{ss}} = T_{\text{amb}} + \frac{\alpha G_{\text{poa}}}{U_0 + U_1 WS}$$
+
+RK4 is used when deterministic replay and fixed compute budget are more important than adaptive local error control.
 
 ### 1.2 Runge-Kutta-Felberg (RK45)
 
+RK45 computes two embedded solutions of different order per step:
+
+$$\mathbf{x}_{n+1}^{(5)} \quad \text{and} \quad \mathbf{x}_{n+1}^{(4)}$$
+
+with local truncation error estimate:
+
+$$\mathbf{e}_{n+1} = \mathbf{x}_{n+1}^{(5)} - \mathbf{x}_{n+1}^{(4)}$$
+
+Step acceptance uses an error norm against tolerance $\epsilon$:
+
+$$\left\lVert \mathbf{e}_{n+1} \right\rVert \le \epsilon \Rightarrow \text{accept step}$$
+
+Adaptive time-step control:
+
+$$\Delta t_{\text{new}} = s \cdot \Delta t \left(\frac{\epsilon}{\left\lVert \mathbf{e}_{n+1} \right\rVert}\right)^{1/5}$$
+
+where $s \in (0,1)$ is a safety factor. RK45 is preferred for stiff-transition periods (rapid irradiance/wind changes) to reduce both under-resolution and unnecessary over-sampling.
 
 ### 1.3 Monte Carlo Uncertainty Quantification
 
+Uncertain inputs are modeled as random variables:
+
+$$\boldsymbol{\xi} = [G_{\text{poa}}, T_{\text{amb}}, WS, \tau_{\text{eff}}, U_0, U_1, \ldots]$$
+
+with prior distributions $p(\boldsymbol{\xi})$. For $N$ samples:
+
+$$\boldsymbol{\xi}^{(i)} \sim p(\boldsymbol{\xi}), \quad y^{(i)} = \mathcal{M}(\boldsymbol{\xi}^{(i)})$$
+
+Estimated moments and quantiles:
+
+$$\hat{\mu}_y = \frac{1}{N}\sum_{i=1}^N y^{(i)}, \quad \hat{\sigma}_y^2 = \frac{1}{N-1}\sum_{i=1}^N \left(y^{(i)}-\hat{\mu}_y\right)^2$$
+
+$$\text{CI}_{95\%}(y) \approx \left[q_{0.025}(y), q_{0.975}(y)\right]$$
+
+In AURA-MPC, Monte Carlo outputs are used to:
+1. Generate synthetic trajectories for PINN regularization.
+2. Estimate uncertainty bands used by watchdog logic.
+3. Rank sensitivity of control-relevant parameters before retraining.
 
 ## 2. PINN: Neural Network Architecture & Physics-Informed Loss
 
@@ -114,3 +167,56 @@ The orchestrator runs on the Pi 3B+ and executes the following control loop at c
    $$x_k^{n+1} = x_k^n + \text{clip}\left(x_{target, k} - x_k^n, -R_k \Delta t, R_k \Delta t\right)$$
    Where $R_k$ is the slew rate limit for axis $k$.
 5. **Transmit**: Writes the command to the actuator stub.
+
+---
+
+## 4. Updated Next-Step Plan (Post-Journal Update)
+
+1. **Lock physics baseline**: Freeze the current RK4/RK45 + thermal parameter set and produce a reproducible baseline dataset split (train/validation/stress).
+2. **Uncertainty calibration pass**: Run Monte Carlo sweeps over sensor noise and weather perturbations; set watchdog uncertainty thresholds from empirical percentiles rather than fixed heuristics.
+3. **PINN retraining cycle**: Retrain with refreshed collocation strategy (clear-sky, variable-cloud, gust events), then compare data-loss vs physics-loss Pareto tradeoff.
+4. **MPC-in-the-loop validation**: Validate closed-loop trajectories in SIL and HIL, focusing on constraint violations, actuator slew saturation, and fallback-trigger frequency.
+5. **Edge DAQ hardening**: Add synchronized timestamp checks, packet-loss accounting, and drift monitoring across Pico + Pi clocks under long-duration runs.
+6. **Field trial readiness gate**: Define pass/fail criteria for 72-hour autonomous operation (uptime, CRC error rate, watchdog activations, net energy gain).
+
+---
+
+## 5. Updated Bill of Materials (No Links / No Prices)
+
+| Category | Item | Qty | Purpose |
+|---|---|---:|---|
+| Edge Compute | Raspberry Pi 4 Model B (4 GB or 8 GB) | 1 | Edge orchestration, logging, MPC inference |
+| Edge Compute | High-endurance microSD card (64 GB+) | 1 | Reliable local data logging |
+| Edge Compute | Active heatsink/fan kit for Pi | 1 | Thermal stability for continuous operation |
+| Sensor MCU | Raspberry Pi Pico RP2040 | 1 | Deterministic sensor polling and framing |
+| Sensor Interface | Logic-level UART/I2C breakout wiring set | 1 set | Clean bus wiring between nodes |
+| Power | 5 V regulated supply for Pi (3 A) | 1 | Stable SBC power rail |
+| Power | 5 V regulated supply for Pico/sensors | 1 | Isolated sensor-domain power |
+| Meteorology | Pyranometer or calibrated irradiance sensor | 1 | POA irradiance measurement |
+| Meteorology | Ambient temperature and RH sensor (industrial grade) | 1 | Weather state for thermal model |
+| Meteorology | Wind speed sensor (anemometer) | 1 | Convective cooling input |
+| Meteorology | Wind direction vane (optional but recommended) | 1 | Advanced flow-aware control features |
+| PV Thermal | Backsheet/module temperature probe (PT100/PT1000 or thermistor) | 2 | Ground truth for model fitting and validation |
+| Mechanical | 4-DoF actuator assembly (pitch/yaw/roll/z) | 1 | Physical panel reorientation |
+| Mechanical | Motor drivers matched to actuator type | 1 set | Motion control execution |
+| Control Safety | Limit switches/end-stop sensors | 1 set | Hard motion boundary enforcement |
+| Control Safety | Emergency stop relay or cutoff chain | 1 | Safety interlock |
+| Enclosure | IP65 electronics enclosure with cable glands | 1 | Outdoor protection |
+| Enclosure | DIN rail / terminal blocks / fusing | 1 set | Serviceable power and wiring layout |
+| Comms | USB-UART adapter (debug and commissioning) | 1 | Field diagnostics |
+| Comms | Optional LTE modem for remote telemetry | 1 | Backhaul when Wi-Fi unavailable |
+
+---
+
+## 6. Top 10 Papers to Read for AURA-MPC
+
+1. Fehlberg, E. (1969). **Low-order classical Runge-Kutta formulas with stepsize control**. NASA Technical Report R-315.
+2. Dormand, J. R., & Prince, P. J. (1980). **A family of embedded Runge-Kutta formulae**. *Journal of Computational and Applied Mathematics*.
+3. Saltelli, A. (2002). **Making best use of model evaluations to compute sensitivity indices**. *Computer Physics Communications*.
+4. Raissi, M., Perdikaris, P., & Karniadakis, G. E. (2019). **Physics-informed neural networks: A deep learning framework for solving forward and inverse problems involving nonlinear partial differential equations**. *Journal of Computational Physics*.
+5. Karniadakis, G. E., et al. (2021). **Physics-informed machine learning**. *Nature Reviews Physics*.
+6. Mayne, D. Q., Rawlings, J. B., Rao, C. V., & Scokaert, P. O. M. (2000). **Constrained model predictive control: Stability and optimality**. *Automatica*.
+7. Qin, S. J., & Badgwell, T. A. (2003). **A survey of industrial model predictive control technology**. *Control Engineering Practice*.
+8. Mathur, V., Saini, Y., Giri, V., et al. (2021). **Weather Station Using Raspberry Pi**. *Proceedings of the 2021 International Conference on Intelligent Information Processing (IEEE)*.
+9. De Soto, W., Klein, S. A., & Beckman, W. A. (2006). **Improvement and validation of a model for photovoltaic array performance**. *Solar Energy*.
+10. Faiman, D. (2008). **Assessing the outdoor operating temperature of photovoltaic modules**. *Progress in Photovoltaics: Research and Applications*.
