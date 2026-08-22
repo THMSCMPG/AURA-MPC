@@ -1,0 +1,40 @@
+# PINN Fine-tuning Configuration
+# Refinement after RL exploration in sandbox
+
+paths:
+  checkpoint_dir: ./outputs/pretrain/checkpoints/best_model.pt  # Load pre-trained
+  output_dir: ./outputs/finetune
+  checkpoints_dir: ./outputs/finetune/checkpoints
+  logs_dir: ./outputs/finetune/logs
+
+data:
+  # Can use additional data from RL exploration
+  csv_data_dir: ../../lattice_batches/
+  rl_experience_dir: ./outputs/sandbox/trajectories/  # Data collected during RL
+  train_split: 0.80
+  val_split: 0.10
+  batch_size: 64
+  num_workers: 4
+
+model:
+  input_dim: 18
+  hidden_dim: 128
+  num_residual_blocks: 4
+  num_outputs: 4
+  dropout: 0.1
+
+training:
+  epochs: 20  # Fewer epochs for fine-tuning
+  learning_rate: 1.0e-4  # Lower learning rate
+  weight_decay: 1.0e-4
+  gradient_clip: 1.0
+
+  # Loss weighting
+  weight_original_data: 0.5  # Synthetic data weight
+  weight_rl_data: 0.5        # RL-collected data weight
+
+optimization:
+  scheduler: cosine
+  cosine_eta_min: 1.0e-7
+
+device: cuda

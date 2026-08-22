@@ -1,6 +1,0 @@
-# Runtime dependencies for the pi/ CPython daemon
-# Pico firmware uses stock MicroPython (+ ubinascii built-in); no pip packages needed there.
-
-pyserial>=3.5
-picamera2>=0.3.12        # Pi Camera v2 (requires libcamera on Pi OS)
-Pillow>=10.0.0
