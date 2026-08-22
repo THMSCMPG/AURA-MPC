@@ -3,27 +3,32 @@
 This module is the single place where the EDGE wire format
 (``PINN_SENSOR_PACKET_SCHEMA``, defined in
 ``src/DAQ4MPC/workstation/packet_schema.py`` / ``src/DAQ4MPC/workstation/packet_builder.py``) is
-translated into the sandbox's internal representation
-(:class:`sandbox.environment.EpisodeConditions`), and back the other way:
-translating a decided pose into a command EDGE can apply to its stepper
-motors.
+translated into the flat conditions dict `decision_server.py` uses, and
+back the other way: building a pose command in the schema an EDGE-side
+actuator would consume (currently unused -- see `pose_to_edge_command`'s
+own docstring, manual actuation is confirmed).
 
 Why this exists
 ----------------
-EDGE, the workstation PINN/RK4TRAN sandbox, and the physical panel joint
-each grew their own vocabulary:
+EDGE and the workstation speak different vocabularies:
 
 * EDGE speaks ``G_poa`` / ``T_amb`` / ``WS`` / ``CC`` (a flat, wire-cheap
   sensor packet with no humidity, pressure, wind direction, or elevation
-  fields — the physical BOM has no sensors for those).
-* The sandbox speaks ``EpisodeConditions`` (a superset used for RK4TRAN /
-  PINN inference: lat, lon, alt, day_of_year, hour, minute, month, year,
-  ambient_c, wind_mps, wind_dir, humidity, irradiance, cloud_cover,
-  pressure).
+  fields — the physical BOM has no sensors for those). ``G_poa``/``CC``
+  are ALWAYS null on the wire -- irradiance and cloud_cover are manual,
+  operator-supplied session constants now (camera dropped, PSO
+  irradiance estimator cut, see checklist), not sensed at all.
+* This module's output is a flat dict (``ambient_c``, ``wind_mps``,
+  ``alt``, ``wind_dir``, ``humidity``, ``pressure``, plus derived time
+  fields) that `decision_server.py`'s `_edge_conditions_to_pinn_groups()`
+  translates further into the grouped weather/location dicts
+  `ClosedLoopRuntime` actually expects. irradiance/cloud_cover are
+  DELIBERATELY NOT part of this output at all -- see
+  `edge_packet_to_conditions`'s docstring for why, this was a real bug
+  fixed 2026-08-22.
 * The physical panel joint (see ``hardware/AURA_MFP_panel_joint.scad``) is a
-  4-DoF pitch/yaw/roll/z gimbal-on-a-post, matching the pose dict already
-  used throughout ``environment.py`` — NOT the azimuth/elevation spherical
-  pose that ``pi/actuator_stub.py`` was written against.
+  4-DoF pitch/yaw/roll/z gimbal-on-a-post -- the pose schema
+  `pose_to_edge_command` builds, when/if anything calls it again.
 
 Every field that EDGE cannot supply is filled from a documented default
 or a station-configuration value (see :data:`STATION_DEFAULTS`). Nothing
@@ -51,18 +56,20 @@ STATION_DEFAULTS: dict[str, float] = {
     "wind_dir": 180.0,      # degrees — no wind vane on the current BOM.
     "humidity": 0.5,        # fraction — no hygrometer on the current BOM.
     "pressure": 101325.0,   # Pa — no barometer on the current BOM; std atmosphere.
-    "cloud_cover": 0.0,     # fraction — used only if CC is null in the packet.
 }
 
 @dataclass
 class ConditionsResult:
-    """Conditions ready for :meth:`PanelEnv.set_conditions`, plus provenance."""
+    """Flat conditions dict extracted from an EDGE packet, plus provenance.
+    Feeds into decision_server.py's _edge_conditions_to_pinn_groups()."""
 
     conditions: dict[str, Any]
     field_sources: dict[str, str] = field(default_factory=dict)
-    """Maps each EpisodeConditions field name to 'edge' | 'default' | 'derived'."""
+    """Maps each returned field name to 'edge' | 'default' | 'derived'."""
     degraded: bool = False
-    """True if fault_flags was non-zero or a required field was null."""
+    """True if fault_flags was non-zero on this packet. NOT set for
+    G_poa/CC being null -- that's the permanent expected state (manual
+    irradiance/cloud_cover entry), not a fault; see module docstring."""
     notes: list[str] = field(default_factory=list)
 
 
@@ -90,7 +97,11 @@ def edge_packet_to_conditions(
     *,
     station_overrides: Optional[dict[str, float]] = None,
 ) -> ConditionsResult:
-    """Convert one ``PINN_SENSOR_PACKET_SCHEMA`` dict into sandbox conditions.
+    """Convert one ``PINN_SENSOR_PACKET_SCHEMA`` dict into a flat conditions
+    dict of everything EDGE can genuinely report or a station default
+    covers. irradiance/cloud_cover deliberately NOT included -- see
+    module docstring, they're operator-supplied session constants, not
+    derived from a packet.
 
     Parameters
     ----------
@@ -98,21 +109,21 @@ def edge_packet_to_conditions(
         A validated EDGE sensor packet (see ``workstation.packet_builder.build_sensor_packet``).
     station_overrides:
         Per-deployment values for fields EDGE cannot measure (``alt``,
-        ``wind_dir``, ``humidity``, ``pressure``, ``cloud_cover`` fallback).
+        ``wind_dir``, ``humidity``, ``pressure``).
         Merged over :data:`STATION_DEFAULTS`.
 
     Returns
     -------
     ConditionsResult
-        ``conditions`` is a dict suitable for
-        ``EpisodeConditions.from_mapping`` / ``PanelEnv.set_conditions``.
+        ``conditions`` is a flat dict of sensed/defaulted/derived fields
+        (NOT irradiance/cloud_cover -- see above).
         ``field_sources`` records, per field, whether the value came from
         the EDGE packet, a station default, or was derived (time fields).
-        ``degraded`` is set when ``fault_flags`` was non-zero or a
-        required numeric field was ``null`` — callers (typically
-        :mod:`sandbox.decision_server`) should still run a decision cycle
-        (graceful degradation), but should flag the cycle as untrustworthy
-        in logs/UI rather than silently trusting a filled-in default.
+        ``degraded`` is set only when ``fault_flags`` was non-zero --
+        callers (typically :mod:`sandbox.decision_server`) should still
+        run a decision cycle (graceful degradation), but should flag the
+        cycle as untrustworthy in logs/UI rather than silently trusting
+        a filled-in default.
     """
     defaults = dict(STATION_DEFAULTS)
     if station_overrides:
@@ -160,21 +171,19 @@ def edge_packet_to_conditions(
     else:
         sources["wind_mps"] = "edge"
 
-    cloud_cover = packet.get("CC")
-    if cloud_cover is None:
-        cloud_cover = float(defaults["cloud_cover"])
-        sources["cloud_cover"] = "default"
-    else:
-        sources["cloud_cover"] = "edge"
-
-    irradiance = packet.get("G_poa")
-    if irradiance is None:
-        irradiance = 0.0
-        sources["irradiance"] = "default"
-        notes.append("irradiance: G_poa was null in packet; assuming 0 W/m^2 (treat as night/fault)")
-        degraded = True
-    else:
-        sources["irradiance"] = "edge"
+    # G_poa and CC are ALWAYS null on the wire now (irradiance/cloud_cover
+    # are manual, operator-supplied session constants -- camera dropped,
+    # PSO irradiance estimator cut, see checklist). They are deliberately
+    # NOT included in the returned conditions dict at all -- a previous
+    # version derived them here (falling back to 0.0 on every packet,
+    # flagged "degraded"/"treat as night") which meant every single
+    # post-calibration packet silently overwrote the operator's real
+    # manually-entered irradiance back to 0.0 via inject_conditions()'s
+    # dict.update() semantics. Found by tracing the actual data flow, not
+    # by inspection. This function now only reports fields EDGE can
+    # genuinely sense (or has a real station default for) -- irradiance/
+    # cloud_cover stay exactly what calibrate()/calibrate_interactive()
+    # set them to, untouched by anything derived from a packet.
 
     time_components = _time_components_from_iso(packet["timestamp"])
     for key in time_components:
@@ -188,8 +197,6 @@ def edge_packet_to_conditions(
         "wind_mps": float(wind_mps),
         "wind_dir": float(defaults["wind_dir"]),
         "humidity": float(defaults["humidity"]),
-        "irradiance": float(irradiance),
-        "cloud_cover": float(cloud_cover),
         "pressure": float(defaults["pressure"]),
         **time_components,
     }

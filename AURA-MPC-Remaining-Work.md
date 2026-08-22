@@ -1,13 +1,5 @@
 # AURA-MPC — Remaining Work Checklist
 
-This is the ONE checklist to keep using going forward — items get removed
-as they're completed, not just marked done. (The old sprawling
-`AURA-MPC-Overhaul-Checklist.md` is historical record only; if something
-looks unfinished there, check here first.)
-
-Last updated 2026-08-22. Two real areas of open work remain, in rough
-priority order.
-
 ---
 
 ## 1. Real-world execution on Loki (blocks almost everything downstream)
@@ -56,17 +48,6 @@ SparkFun weather:bit (Qwiic, onboard BME280) + SparkFun Weather Meter
 Kit + SparkFun OpenLog + MAX31856 thermocouple amplifier (5 real
 channels).
 
-**Done and validated**: the C firmware emits raw ADC counts (no more
-firmware-side calibration), the workstation applies calibration before
-anything reaches the MPC decision logic, `decision_server.py` reads the
-Pico's USB port directly and runs a real calibration handshake,
-`calibrate.py`'s wizard works end-to-end for the real sensor set (7
-sensors: `t_amb`, `ws`, `thermocouple_0..4`), and three separate
-generations of dead code (COBS-era, `daemon.py`-era, and an even older
-"simv2b runner" era) have been removed. All of this was actually run and
-tested, not just written — see the checklist history for specifics if
-needed.
-
 **Genuinely still open, all hardware-dependent (correctly deferred, not
 forgotten) unless noted:**
 
@@ -92,24 +73,14 @@ forgotten) unless noted:**
   live-hardware/mock paths** against the new raw-packet format — both
   currently just import cleanly again, their actual sensor-reading logic
   still reflects the old dead architecture.
-- [ ] **Auto-detect the Pico's USB connection** rather than requiring an
-  explicit `--serial-port` argument — part of your stated "application
-  that detects a connection" vision, not yet built.
 - [ ] **Real hardware test** — everything validated against a
   pty-simulated Pico and the real wire format as closely as could be
   confirmed from source, not an actual physical device.
-- [ ] Minor: reconcile `replay.py` (deleted as dead-import) against
-  `matlab_bridge.py`'s newer `replay_session_json()` — likely already
-  redundant, not formally checked.
 
 ---
 
 ## 3. MPC runtime — loose ends from the sandbox/ rework
 
-- [ ] **`viewer.py`, `edge_adapter.py`, `scenarios.py`** — confirmed to
-  still import and (for `edge_adapter`) partially work via the
-  `decision_server.py` integration tests, but none got a fresh,
-  dedicated correctness read. Worth one before relying on them live.
 - [ ] **No real EDGE hardware test.** Everything validated against
   mocked/simulated packets, not an actual physical device sending real
   packets — same item as in Section 2, listed here too since it also
@@ -120,3 +91,19 @@ forgotten) unless noted:**
   to a `decision_id`) — worth revisiting once you have a real session's
   worth of data to see if it captures what the eventual paper analysis
   needs, or wants more fields.
+
+---
+
+## 4. Workstation Application
+
+- [ ] **Write up new Matlab Workstation Application** at root "workstation/" directory
+- [ ] **Workstation parameters** include:
+    - [ ] being the primary application source that runs the machine learning code
+    - [ ] allows user to view the 3D render of the solar panel, the live data being collected, and the decisions
+    - [ ] much like run_prototype_simulation.m and run_simulation.m
+    - [ ] present plots, replay series, run RK4TRAIN smoke tests of training, run callibration sequencing
+    - [ ] part of callibration sequencing confirms Pico USB connection and all sensors are green
+- [ ] **Auto-detect the Pico's USB connection** rather than requiring an
+  explicit `--serial-port` argument — part of your stated "application
+  that detects a connection" vision, not yet built.
+

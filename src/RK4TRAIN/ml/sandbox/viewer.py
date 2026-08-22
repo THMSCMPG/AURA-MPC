@@ -1,7 +1,15 @@
 """3D Live Viewer for sandbox environment.
 
 Visualizes panel orientation, weather conditions, and PINN predictions
-in real-time during RL training.
+during a live or replayed MPC decision session.
+
+NOT CURRENTLY WIRED IN (checked 2026-08-22): nothing in the current
+pipeline (runtime.py, decision_server.py, matlab_bridge.py) calls
+Viewer3D/ViewerFactory. render_state()'s parameters below reflect the
+current MPC vocabulary (decision_id instead of episode/step, no
+reward_breakdown -- there's no reward function anymore, MPC picks by
+argmax predicted cooling, not a learned reward). Someone wiring this in
+would call render_state() once per ClosedLoopRuntime.recommend() result.
 """
 
 from __future__ import annotations
@@ -53,38 +61,38 @@ class Viewer3D:
         weather: dict[str, float],
         pinn_pred: dict[str, float],
         rk4_pred: Optional[dict[str, float]] = None,
-        reward_breakdown: Optional[dict[str, float | str]] = None,
         discrepancy: Optional[dict[str, float]] = None,
         decision_reason: str = "",
-        episode: int = 0,
-        step: int = 0,
+        decision_id: str = "",
     ) -> None:
         """Render current environment state.
 
         Args:
-            pose: Panel pose {pitch, yaw, roll, z}
-            weather: Weather conditions {T_amb, wind, irradiance, clouds, ...}
-            pinn_pred: PINN predictions {T_operating, eta, ...}
-            rk4_pred: Optional RK4TRAN ground truth
-            episode: Episode number
-            step: Step within episode
+            pose: Panel pose {pitch, yaw, roll, z} -- pass the CHOSEN
+                candidate's pose from a ClosedLoopRuntime.recommend() result.
+            weather: Weather conditions {T_amb, wind_speed, irradiance, cloud_cover, ...}
+            pinn_pred: PINN predictions {T_operating, eta, ...} for the chosen candidate
+            rk4_pred: Optional RK4TRAN steady-state cross-check (recommend()'s
+                rk4_steady_state_check, when available)
+            discrepancy: Optional PINN-vs-RK4TRAN discrepancy (recommend()'s discrepancy)
+            decision_reason: Free-text reason string
+            decision_id: recommend()'s decision_id -- replaces the old
+                episode/step numbering (no more RL episode loop)
         """
         if not self.enabled:
             return
 
         self.frame_count += 1
 
-        # Text-based visualization (can be enhanced with matplotlib later)
         state_str = self._format_state(
             pose,
             weather,
             pinn_pred,
             rk4_pred,
-            reward_breakdown,
             discrepancy,
             decision_reason,
         )
-        self._log_state(state_str, episode, step)
+        self._log_state(state_str, decision_id)
 
     def _format_state(
         self,
@@ -92,7 +100,6 @@ class Viewer3D:
         weather: dict[str, float],
         pinn_pred: dict[str, float],
         rk4_pred: Optional[dict[str, float]] = None,
-        reward_breakdown: Optional[dict[str, float | str]] = None,
         discrepancy: Optional[dict[str, float]] = None,
         decision_reason: str = "",
     ) -> str:
@@ -102,7 +109,7 @@ class Viewer3D:
             pose: Panel pose
             weather: Weather
             pinn_pred: PINN predictions
-            rk4_pred: RK4TRAN predictions
+            rk4_pred: RK4TRAN steady-state cross-check
 
         Returns:
             Formatted state string
@@ -137,22 +144,6 @@ class Viewer3D:
             lines.append(f"  RK4:   T = {T_r:.1f}K | η = {eta_r:.4f}")
             lines.append(f"  Error: ΔT = {T_err:.2f}K | Δη = {eta_err:.6f}")
 
-        if reward_breakdown:
-            lines.append("REWARD")
-            lines.append("-" * 70)
-            lines.append(
-                "  "
-                f"capture={float(reward_breakdown.get('capture_reward', 0.0)):+.4f}  "
-                f"temp={float(reward_breakdown.get('temp_penalty', 0.0)):+.4f}  "
-                f"smooth={float(reward_breakdown.get('smoothness_penalty', 0.0)):+.4f}  "
-                f"corr={float(reward_breakdown.get('correction_penalty', 0.0)):+.4f}"
-            )
-            lines.append(
-                "  "
-                f"origin={reward_breakdown.get('reward_origin', 'unknown')}  "
-                f"total={float(reward_breakdown.get('total_reward', 0.0)):+.4f}"
-            )
-
         if decision_reason:
             lines.append("DECISION")
             lines.append("-" * 70)
@@ -162,32 +153,37 @@ class Viewer3D:
 
         return "\n".join(lines)
 
-    def _log_state(self, state_str: str, episode: int, step: int) -> None:
+    def _log_state(self, state_str: str, decision_id: str) -> None:
         """Log state to file.
 
         Args:
             state_str: Formatted state string
-            episode: Episode number
-            step: Step number
+            decision_id: ClosedLoopRuntime.recommend()'s decision_id --
+                one file per calibration session made more sense as
+                "episode" before; a live/replay session is now one
+                continuous stream of decisions, so this logs to a single
+                running file per output_dir instead, one line per decision.
         """
-        log_file = self.output_dir / f"episode_{episode:04d}.txt"
+        log_file = self.output_dir / "session.txt"
         with open(log_file, "a") as f:
-            f.write(f"[Step {step}]\n{state_str}\n\n")
+            f.write(f"[{decision_id or self.frame_count}]\n{state_str}\n\n")
 
-    def plot_episode_summary(
+    def plot_session_summary(
         self,
-        episode: int,
-        rewards: list[float],
         T_errors: list[float],
         eta_errors: list[float],
+        predicted_coolings: list[float],
     ) -> None:
-        """Create episode summary plot.
+        """Create a session summary plot.
 
         Args:
-            episode: Episode number
-            rewards: List of rewards per step
-            T_errors: Temperature prediction errors
-            eta_errors: Efficiency prediction errors
+            T_errors: PINN-vs-RK4TRAN temperature discrepancy per decision
+            eta_errors: PINN-vs-RK4TRAN efficiency discrepancy per decision
+            predicted_coolings: Chosen candidate's predicted_cooling per
+                decision (replaces the old RL reward-per-step plot --
+                there's no reward function in the MPC design, predicted
+                cooling is the closest analogous "how good was this pick"
+                signal, from candidate argmax selection)
         """
         if not self.enabled:
             return
@@ -197,28 +193,27 @@ class Viewer3D:
 
             fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
-            # Rewards
-            axes[0].plot(rewards)
-            axes[0].set_title("Episode Rewards")
-            axes[0].set_xlabel("Step")
-            axes[0].set_ylabel("Reward")
+            axes[0].plot(predicted_coolings)
+            axes[0].set_title("Chosen Candidate's Predicted Cooling")
+            axes[0].set_xlabel("Decision #")
+            axes[0].set_ylabel("Predicted cooling (K)")
             axes[0].grid(True)
 
             # Temperature errors
             axes[1].plot(T_errors)
             axes[1].set_title("Temperature Prediction Error")
-            axes[1].set_xlabel("Step")
+            axes[1].set_xlabel("Decision #")
             axes[1].set_ylabel("|T_PINN - T_RK4| (K)")
             axes[1].grid(True)
 
             # Efficiency errors
             axes[2].plot(eta_errors)
             axes[2].set_title("Efficiency Prediction Error")
-            axes[2].set_xlabel("Step")
+            axes[2].set_xlabel("Decision #")
             axes[2].set_ylabel("|η_PINN - η_RK4|")
             axes[2].grid(True)
 
-            plot_file = self.output_dir / f"episode_{episode:04d}.png"
+            plot_file = self.output_dir / "session_summary.png"
             plt.savefig(plot_file, dpi=100, bbox_inches="tight")
             plt.close()
 

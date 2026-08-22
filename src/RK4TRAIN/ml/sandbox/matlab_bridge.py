@@ -187,7 +187,14 @@ class MatlabSimulationBridge:
         )
 
     def scenario_conditions_json(self, name: str) -> str:
-        """Return one preset's condition fields, ready to fill MATLAB's edit boxes."""
+        """Return one preset's conditions, ready to feed into calibrate_json().
+
+        Shape: ``{"description": str, "weather": {...}, "location": {...},
+        "time": {...}}`` -- pull out ``.weather``/``.location`` sub-objects
+        and re-stringify each for ``calibrate_json(weather_json=...,
+        location_json=...)``; ``.time`` is a ready-made time_components
+        argument for a first ``recommend_json()`` call afterward.
+        """
         return json.dumps(_scenarios.get_scenario(str(name)))
 
     # ── Live conditions injection (EDGE feed, or MATLAB-side "what if") ───

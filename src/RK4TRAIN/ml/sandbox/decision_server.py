@@ -118,8 +118,13 @@ def raw_packet_to_pinn_packet(raw_packet: dict[str, Any], calibration=None) -> d
     }
 
 
-def _edge_conditions_to_pinn_groups(conditions: dict[str, Any]) -> dict[str, dict[str, float]]:
-    """Translates edge_adapter.py's flat EpisodeConditions-style dict
+def _edge_conditions_to_pinn_groups(
+    conditions: dict[str, Any],
+    *,
+    irradiance: Optional[float] = None,
+    cloud_cover: Optional[float] = None,
+) -> dict[str, dict[str, float]]:
+    """Translates edge_adapter.py's flat conditions dict
     (ambient_c, wind_mps, alt, ... -- see that module's docstring) into the
     grouped weather/location/time dicts PINNValidator.predict() expects
     (T_amb, wind_speed, elevation, ...).
@@ -135,16 +140,30 @@ def _edge_conditions_to_pinn_groups(conditions: dict[str, Any]) -> dict[str, dic
     K, validated repeatedly this session). Found by actually running a
     mocked packet through the new code path, not by inspection -- it threw
     a real KeyError before this existed.
+
+    irradiance/cloud_cover: passed in EXPLICITLY, not read from
+    `conditions` -- edge_adapter.py's output deliberately never includes
+    them (they're operator-supplied session constants, not sensed; a
+    prior version derived them from the always-null G_poa/CC fields,
+    which meant every post-calibration packet silently overwrote the
+    operator's manually-entered irradiance back to 0.0 via
+    inject_conditions()'s dict.update() semantics -- real bug, fixed
+    2026-08-22). Pass None (the default) when you don't want these keys
+    in the output at all -- e.g. handle_packet()'s per-packet call, where
+    the goal is specifically to NOT touch the calibrated irradiance/
+    cloud_cover values.
     """
     weather = {
         "T_amb": float(conditions["ambient_c"]) + 273.15,  # C -> K
         "wind_speed": float(conditions["wind_mps"]),
         "wind_dir": float(conditions["wind_dir"]),
         "humidity": float(conditions["humidity"]),
-        "irradiance": float(conditions["irradiance"]),
-        "cloud_cover": float(conditions["cloud_cover"]),
         "pressure": float(conditions["pressure"]),
     }
+    if irradiance is not None:
+        weather["irradiance"] = float(irradiance)
+    if cloud_cover is not None:
+        weather["cloud_cover"] = float(cloud_cover)
     location = {
         "lon": float(conditions["lon"]),
         "lat": float(conditions["lat"]),
@@ -228,16 +247,28 @@ class DecisionServer:
         self._decision_log_path.touch(exist_ok=True)
 
     # ------------------------------------------------------------------
-    def calibrate_from_packet(self, packet: dict[str, Any], target_position: dict[str, float]) -> dict[str, Any]:
+    def calibrate_from_packet(
+        self,
+        packet: dict[str, Any],
+        target_position: dict[str, float],
+        *,
+        irradiance: float,
+        cloud_cover: float,
+    ) -> dict[str, Any]:
         """Must be called once, explicitly, before handle_packet() -- there
         is no more implicit "first packet establishes conditions" behavior.
-        Per the manual calibration workflow: weather (including irradiance/
-        cloud_cover, now manual set-value entries -- camera dropped, PSO
-        irradiance estimator cut this session) comes from the caller, not
-        derived from the packet.
+
+        irradiance/cloud_cover are REQUIRED, explicit parameters -- they
+        never come from the packet (G_poa/CC are always null on the wire,
+        manual entry per the checklist). A previous version silently
+        derived them from the packet instead (always 0.0, since always
+        null) -- real bug, fixed 2026-08-22, see
+        _edge_conditions_to_pinn_groups()'s docstring for the full story.
         """
         conditions_result = edge_adapter.edge_packet_to_conditions(packet, station_overrides=self.station_overrides)
-        groups = _edge_conditions_to_pinn_groups(conditions_result.conditions)
+        groups = _edge_conditions_to_pinn_groups(
+            conditions_result.conditions, irradiance=irradiance, cloud_cover=cloud_cover
+        )
         record = self.runtime.calibrate(
             weather=groups["weather"],
             location=groups["location"],
