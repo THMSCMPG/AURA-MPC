@@ -10,7 +10,7 @@ These are deliberately named after physically distinct regimes so a demo
 audience can connect a scenario name to what they should expect to see
 in the PINN-vs-RK4TRAN drift plot and the decision trace, and so they
 loosely mirror the EDGE-side packet scenarios in
-``pi/scripts/simulate.py`` (``partly_cloudy``, ``fault_inject``, ...)
+``workstation/scripts/simulate.py`` (``partly_cloudy``, ``fault_inject``, ...)
 without being required to match one-for-one — the EDGE scenarios test
 wire-level edge cases (nulls, faults), these test control-relevant
 physical regimes.

@@ -1,4 +1,4 @@
-"""decision_server.py – EDGE-facing TCP server closing the control loop.
+"""decision_server.py – EDGE-facing server closing the control loop.
 
 This is the "workstation" half of::
 
@@ -10,10 +10,15 @@ RL policy -- it's MPC candidate-evaluation using PINNSurrogate's fast
 15-minute transient lookahead (D10). No weight updates happen here or
 anywhere in the live path.
 
-EDGE (``pi.gateway`` / ``pi.orchestrator_bridge``, running on the Pi) opens
-a TCP connection here (``AURA_EDGE_BRIDGE_MODE=tcp_socket``), sends one
-``PINN_SENSOR_PACKET_SCHEMA`` JSON line per sample window, and this server
-replies with one pose recommendation JSON line per packet.
+ARCHITECTURE UPDATE (this session): EDGE is now Pico-only (Pi 3B+ dropped)
+talking USB serial directly to the workstation -- no separate Pi process,
+no TCP hop, no network config. The Pico's C firmware (``DAQ4MPC/pico/``)
+emits one ``PINN_SENSOR_PACKET_SCHEMA`` JSON line per sample over its USB
+CDC port; this class's ``run_serial()`` reads that port directly and calls
+``handle_packet()`` in-process -- no relay, no separate "gateway" process.
+(TCP mode, ``run()``, is kept for anyone still testing without real
+hardware attached, or a future non-USB EDGE variant -- not the primary
+path anymore.)
 
 Per packet (AFTER an explicit calibrate_from_packet() call -- see
 DecisionServer's docstring, there's no more implicit "first packet
@@ -28,20 +33,14 @@ establishes conditions"), this server:
 3. Runs one MPC decision cycle (:meth:`sandbox.runtime.ClosedLoopRuntime.recommend`):
    propose candidate orientations, evaluate each with the PINN's fast
    transient lookahead, argmax by predicted cooling (D6).
-4. Converts the chosen candidate into an EDGE-facing message
-   (:func:`sandbox.edge_adapter.pose_to_edge_command`) and replies.
+4. Logs the recommendation and prints it for the operator to read and
+   act on manually (no automated actuation -- confirmed this session,
+   see ``handle_packet()``'s docstring).
 5. Appends a full record — EDGE provenance plus every candidate's
    prediction/confidence, not just the winner's — to a JSONL log, which is
    the light predicted-vs-actual logging layer's input (tie a later
    real efficiency measurement back to a decision_id via
    ClosedLoopRuntime.record_outcome()).
-
-This deliberately does **not** replace ``pi.orchestrator_bridge`` — it
-replaces what that bridge talks to. Point
-``AURA_EDGE_BRIDGE_MODE=tcp_socket`` at this server's host:port instead of
-the (currently nonexistent) ``python -m scripts.predict --mode live``
-``subprocess_pipe`` target. See the module docstring in
-``pi/orchestrator_bridge.py`` for the up-to-date transport guidance.
 
 This server is intentionally single-connection / single-episode, mirroring
 ``workstation/inference_server.py``'s "one inference node" design note —
@@ -66,6 +65,57 @@ from .matlab_bridge import _ensure_fortran_binary, _resolve_fortran_binary
 from .runtime import ClosedLoopRuntime
 
 log = logging.getLogger("decision_server")
+
+
+def _import_calibration():
+    """Lazily import DAQ4MPC.workstation.calibration.Calibration --
+    cross-package import (this file lives under src/RK4TRAIN,
+    calibration.py lives under src/DAQ4MPC/workstation), so the right
+    directory needs to be on sys.path first. Done lazily (called from
+    raw_packet_to_pinn_packet, not at module load time) so importing
+    decision_server.py doesn't hard-fail for anyone not using the
+    serial/raw-packet path."""
+    daq4mpc_src = Path(__file__).resolve().parents[3] / "DAQ4MPC"
+    if str(daq4mpc_src) not in sys.path:
+        sys.path.insert(0, str(daq4mpc_src))
+    from workstation.calibration import Calibration
+    return Calibration
+
+
+def raw_packet_to_pinn_packet(raw_packet: dict[str, Any], calibration=None) -> dict[str, Any]:
+    """Translate one PICO_RAW_PACKET_SCHEMA packet (see pico/json_builder.h)
+    into the existing PINN_SENSOR_PACKET_SCHEMA format that handle_packet()/
+    edge_packet_to_conditions() already expect and are tested against.
+
+    This is the ONE place calibration gets applied -- confirmed this
+    session: calibration lives on the workstation, the Pico only emits
+    raw ADC counts. Doing the translation here, before anything reaches
+    handle_packet(), means the rest of the pipeline (edge_adapter.py,
+    ClosedLoopRuntime, everything already built and tested) needed ZERO
+    changes for this -- it still only ever sees calibrated, physical-unit
+    packets in the same shape as before.
+    """
+    if calibration is None:
+        Calibration = _import_calibration()
+        calibration = Calibration()
+
+    t_amb_c = calibration.t_amb(raw_packet["T_amb_raw"])
+    ws = calibration.ws(raw_packet["WS_raw"])
+
+    return {
+        "timestamp": raw_packet["timestamp"],
+        "t_s": raw_packet["t_s"],
+        "G_poa": None,   # manual-entry, not sensed -- see checklist Section 1.12
+        "T_amb": t_amb_c,
+        "WS": ws,
+        "CC": None,      # manual-entry, not sensed
+        "lat": raw_packet["lat"],
+        "lon": raw_packet["lon"],
+        "sky_image_path": None,  # camera dropped
+        "pose": None,
+        "fault_flags": raw_packet["fault_flags"],
+        "edge_version": raw_packet["edge_version"],
+    }
 
 
 def _edge_conditions_to_pinn_groups(conditions: dict[str, Any]) -> dict[str, dict[str, float]]:
@@ -223,7 +273,7 @@ class DecisionServer:
         self.runtime.inject_conditions(weather=groups["weather"], location=groups["location"])
 
         # T_panel_current: checked the REAL packet schema this session
-        # (src/DAQ4MPC/pi/packet_schema.py) -- there is no panel-temperature
+        # (src/DAQ4MPC/workstation/packet_schema.py) -- there is no panel-temperature
         # field anywhere in it (schema is timestamp_iso, G_poa, T_amb, WS,
         # CC, lat, lon, azimuth, tilt, height, fault_flags, sky_image_path,
         # pose, edge_version). This isn't a naming mismatch to fix -- the
@@ -349,6 +399,136 @@ class DecisionServer:
         except OSError as exc:
             log.warning("decision_server: send failed — %s", exc)
 
+    # ------------------------------------------------------------------
+    def calibrate_interactive(self, ser, calibration=None) -> None:
+        """Real calibration handshake for the serial workflow: read one
+        raw packet off the given open serial connection, translate it
+        (calibration applied here too, same as the main loop) for
+        weather/location context, prompt the operator for a target
+        position, confirm they've physically set it, and call
+        runtime.calibrate(). Blocks on stdin input -- meant for an
+        operator sitting at the terminal, not headless/unattended use.
+        """
+        if calibration is None:
+            Calibration = _import_calibration()
+            calibration = Calibration()
+
+        log.info("Calibration: waiting for one packet from EDGE to read current weather/location context...")
+        packet = None
+        while packet is None:
+            raw = ser.readline()
+            if not raw:
+                continue
+            try:
+                raw_packet = json.loads(raw.decode("utf-8", errors="replace").strip())
+                packet = raw_packet_to_pinn_packet(raw_packet, calibration)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+            except json.JSONDecodeError:
+                continue
+
+        print(f"\nGot a packet from EDGE: {packet}")
+        print("Enter session weather (irradiance/cloud_cover are manual -- camera dropped, no live sensing):")
+
+        # Sensible defaults pulled from the packet where available, computed
+        # explicitly (not folded into the input() prompt) so it's obvious
+        # and testable what each default actually is.
+        packet_t_amb_c = packet.get("T_amb")
+        default_t_amb_k = (packet_t_amb_c + 273.15) if packet_t_amb_c is not None else 293.15
+        default_wind_speed = packet.get("WS") if packet.get("WS") is not None else 0.0
+
+        def _prompt_float(label: str, default: float) -> float:
+            raw = input(f"  {label} [{default}]: ").strip()
+            return float(raw) if raw else float(default)
+
+        weather = {
+            "T_amb": _prompt_float("T_amb (K)", default_t_amb_k),
+            "wind_speed": _prompt_float("wind_speed (m/s)", default_wind_speed),
+            "wind_dir": _prompt_float("wind_dir (deg)", 0.0),
+            "humidity": _prompt_float("humidity (0-1)", 0.5),
+            "irradiance": _prompt_float("irradiance (W/m^2, manual)", 0.0),
+            "cloud_cover": _prompt_float("cloud_cover (0-1, manual)", 0.0),
+            "pressure": _prompt_float("pressure (Pa)", 101325.0),
+        }
+        location = {
+            "lat": _prompt_float("lat", packet.get("lat", 0.0)),
+            "lon": _prompt_float("lon", packet.get("lon", 0.0)),
+            "elevation": _prompt_float("elevation (m)", 0.0),
+        }
+        print("Enter target position for the operator to physically set:")
+        target_position = {
+            "pitch": _prompt_float("target pitch (deg)", 0.0),
+            "roll": _prompt_float("target roll (deg)", 0.0),
+            "yaw": _prompt_float("target yaw (deg)", 0.0),
+        }
+        input("Physically set the panel to that position, then press Enter to confirm...")
+        confirmed_position = dict(target_position)  # operator confirms by pressing Enter; adjust here if it differs
+
+        record = self.runtime.calibrate(
+            weather=weather, location=location,
+            target_position=target_position, confirmed_position=confirmed_position,
+            confirmed_readback=packet,
+        )
+        self._calibrated = True
+        print(f"Calibrated. {record}\n")
+
+    # ------------------------------------------------------------------
+    def run_serial(self, port: str, baud: int = 115200) -> None:
+        """Primary Pico-only entry point: read the Pico's USB CDC serial
+        port directly and call handle_packet() in-process. No relay, no
+        separate gateway process, no reply written back -- the Pico only
+        ever emits (manual actuation means there's nothing for it to
+        receive), and the recommendation is already logged/printed by
+        handle_packet() itself for the operator to read.
+
+        Requires calibrate_from_packet() to have been called first (same
+        as the TCP path) -- deliberately does NOT auto-calibrate from the
+        first packet with a placeholder position. Calibration exists
+        specifically so the operator confirms a KNOWN position before any
+        recommendation is trusted; silently calibrating against whatever
+        pose happened to be sensed first would defeat that entirely. If
+        you haven't calibrated yet, this logs a clear error per packet
+        and keeps waiting rather than crashing or guessing.
+        """
+        import serial  # pyserial -- imported lazily so TCP-only usage has no hard dep
+        Calibration = _import_calibration()
+        calibration = Calibration()  # one instance, reused for every packet -- loads calibration/*.json once
+
+        log.info("decision_server: opening serial port %s at %d baud", port, baud)
+        with serial.Serial(port, baud, timeout=5.0) as ser:
+            if not self._calibrated:
+                self.calibrate_interactive(ser, calibration)
+
+            while True:
+                raw = ser.readline()
+                if not raw:
+                    continue  # timeout with no data -- keep waiting, Pico may just be between samples
+                try:
+                    line = raw.decode("utf-8", errors="replace").strip()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("decision_server: undecodable serial line — %s", exc)
+                    continue
+                if not line:
+                    continue
+                try:
+                    raw_packet = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    log.warning("decision_server: malformed EDGE packet JSON — %s (%r)", exc, line[:200])
+                    continue
+
+                try:
+                    packet = raw_packet_to_pinn_packet(raw_packet, calibration)
+                except (KeyError, TypeError) as exc:
+                    log.warning("decision_server: raw packet missing expected fields — %s (%r)", exc, raw_packet)
+                    continue
+
+                try:
+                    self.handle_packet(packet)
+                except RuntimeError as exc:
+                    log.error("decision_server: %s -- run calibrate_from_packet() first", exc)
+                except Exception as exc:  # noqa: BLE001 — never take the server down on one bad packet
+                    log.error("decision_server: handle_packet raised — %s", exc)
+
 
 # ══════════════════════════════════════════════════════════════════════
 # CLI entry point
@@ -365,6 +545,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--port", type=int, default=8766)
+    p.add_argument("--transport", choices=["serial", "tcp"], default="serial",
+                    help="serial: read the Pico's USB CDC port directly (Pico-only design, primary path). "
+                         "tcp: legacy socket listener, for testing without hardware attached.")
+    p.add_argument("--serial-port", default="/dev/ttyACM0",
+                    help="Pico's USB CDC serial device (serial transport only). "
+                         "Typically /dev/ttyACM0 on Linux, COM<N> on Windows.")
+    p.add_argument("--serial-baud", type=int, default=115200)
     p.add_argument("--config", required=True, metavar="PATH", help="sandbox.yaml path")
     p.add_argument("--checkpoint", default=None, metavar="PATH", help="PINN checkpoint (*.pt)")
     p.add_argument("--output-dir", default=None, metavar="PATH")
@@ -402,7 +589,10 @@ def main(argv: list[str] | None = None) -> int:
         n_candidates=args.n_candidates,
         station_overrides=overrides,
     )
-    server.run()
+    if args.transport == "serial":
+        server.run_serial(args.serial_port, args.serial_baud)
+    else:
+        server.run()
     return 0
 
 

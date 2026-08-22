@@ -2,7 +2,7 @@
 
 This module is the single place where the EDGE wire format
 (``PINN_SENSOR_PACKET_SCHEMA``, defined in
-``src/DAQ/pi/packet_schema.py`` / ``src/DAQ/pi/packet_builder.py``) is
+``src/DAQ4MPC/workstation/packet_schema.py`` / ``src/DAQ4MPC/workstation/packet_builder.py``) is
 translated into the sandbox's internal representation
 (:class:`sandbox.environment.EpisodeConditions`), and back the other way:
 translating a decided pose into a command EDGE can apply to its stepper
@@ -95,7 +95,7 @@ def edge_packet_to_conditions(
     Parameters
     ----------
     packet:
-        A validated EDGE sensor packet (see ``pi.packet_builder.build_sensor_packet``).
+        A validated EDGE sensor packet (see ``workstation.packet_builder.build_sensor_packet``).
     station_overrides:
         Per-deployment values for fields EDGE cannot measure (``alt``,
         ``wind_dir``, ``humidity``, ``pressure``, ``cloud_cover`` fallback).
@@ -225,13 +225,18 @@ def pose_to_edge_command(
     command_id: Optional[str] = None,
     now_utc: Optional[datetime] = None,
 ) -> dict[str, Any]:
-    """Build the JSON command EDGE's actuator stub / stepper driver consumes.
+    """Build a pitch/yaw/roll/z pose command in the schema an EDGE-side
+    actuator would consume.
 
-    Uses the native ``pitch/yaw/roll/z`` pose representation the rest of
-    the stack (PanelEnv, RK4TRANValidator, the PINN pose head) already
-    speaks, instead of the azimuth/elevation spherical schema the old
-    ``pi.actuator_stub.ActuatorStub`` expected. See
-    ``pi/actuator_stub.py`` for the corresponding parsing update.
+    CURRENTLY UNUSED (2026-08-22): confirmed manual actuation this session
+    -- decision_server.py's handle_packet() no longer calls this at all,
+    it logs the recommendation for the operator instead of building a
+    command (see that file's comment right where this used to be called).
+    ``pi.actuator_stub.ActuatorStub``, the consumer this was originally
+    built for, was deleted along with the rest of the dead Pi-hosted
+    architecture. Kept, not deleted, in case an automated actuator gets
+    added later and this pose schema is still the right shape for it --
+    but as of now nothing in the live path calls this function.
     """
     if now_utc is None:
         now_utc = datetime.now(timezone.utc)
